@@ -15,7 +15,10 @@
       "Bash(git checkout:*)",
       "Bash(cat:*)",
       "Bash(npm run *2)",
-      "Bash(npx next *)"
+      "Bash(npx next *)",
+      "Bash(npx tsc *)",
+      "Bash(npm run *)",
+      "Bash(git commit -m ' *)"
     ]
   },
   "enableAllProjectMcpServers": true,
