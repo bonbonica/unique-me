@@ -1,4 +1,4 @@
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Fraunces } from "next/font/google";
 import "./globals.css";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
@@ -16,38 +16,52 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
+  subsets: ["latin"],
+  display: "swap",
+  style: ["normal", "italic"],
+  axes: ["opsz", "SOFT", "WONK"],
+});
+
+// Shared product description — kept in one constant so metadata, OG, Twitter,
+// and the JSON-LD payload never drift out of sync.
+const productDescription =
+  "AI social-media post generator and auto-poster for business owners. Tell us about your business, answer two weekly questions, and we'll create and schedule a week of posts to Facebook, Instagram, and LinkedIn.";
+
+const productSocialTitle =
+  "UniqueMe — AI social-media posts for your business";
+
 export const metadata: Metadata = {
   title: {
-    default: "Agentic Coding Boilerplate",
-    template: "%s | Agentic Coding Boilerplate",
+    default: "UniqueMe",
+    template: "%s | UniqueMe",
   },
-  description:
-    "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling - perfect for building AI-powered applications and autonomous agents by Leon van Zyl",
+  description: productDescription,
   keywords: [
-    "Next.js",
-    "React",
-    "TypeScript",
+    "UniqueMe",
     "AI",
-    "OpenRouter",
-    "Boilerplate",
-    "Authentication",
-    "PostgreSQL",
+    "Social Media",
+    "Content Generation",
+    "Small Business",
+    "Marketing Automation",
+    "Facebook",
+    "Instagram",
+    "LinkedIn",
   ],
-  authors: [{ name: "Leon van Zyl" }],
-  creator: "Leon van Zyl",
+  authors: [{ name: "UniqueMe" }],
+  creator: "UniqueMe",
   openGraph: {
     type: "website",
     locale: "en_US",
-    siteName: "Agentic Coding Boilerplate",
-    title: "Agentic Coding Boilerplate",
-    description:
-      "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling",
+    siteName: "UniqueMe",
+    title: productSocialTitle,
+    description: productDescription,
   },
   twitter: {
     card: "summary_large_image",
-    title: "Agentic Coding Boilerplate",
-    description:
-      "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling",
+    title: productSocialTitle,
+    description: productDescription,
   },
   robots: {
     index: true,
@@ -55,14 +69,14 @@ export const metadata: Metadata = {
   },
 };
 
-// JSON-LD structured data for SEO
+// JSON-LD structured data for SEO. UniqueMe is a marketing/business
+// application, not a developer tool — keep applicationCategory aligned.
 const jsonLd = {
   "@context": "https://schema.org",
   "@type": "WebApplication",
-  name: "Agentic Coding Boilerplate",
-  description:
-    "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling",
-  applicationCategory: "DeveloperApplication",
+  name: "UniqueMe",
+  description: productDescription,
+  applicationCategory: "BusinessApplication",
   operatingSystem: "Any",
   offers: {
     "@type": "Offer",
@@ -71,7 +85,7 @@ const jsonLd = {
   },
   author: {
     "@type": "Person",
-    name: "Leon van Zyl",
+    name: "UniqueMe",
   },
 };
 
@@ -89,12 +103,17 @@ export default function RootLayout({
         />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen flex flex-col`}
+        className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} antialiased min-h-screen flex flex-col`}
       >
+        {/*
+          UniqueMe is dark-only by design (DESIGN.md § 2). We pin next-themes
+          to "dark" via forcedTheme so any stray client toggle or system
+          preference cannot escape the Midnight + Champagne palette.
+        */}
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
-          enableSystem
+          defaultTheme="dark"
+          forcedTheme="dark"
           disableTransitionOnChange
         >
           <SiteHeader />

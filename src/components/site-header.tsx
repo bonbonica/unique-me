@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { Bot } from "lucide-react";
 import { UserProfile } from "@/components/auth/user-profile";
-import { ModeToggle } from "./ui/mode-toggle";
 
 export function SiteHeader() {
   return (
@@ -18,26 +17,30 @@ export function SiteHeader() {
           className="container mx-auto px-3 sm:px-4 py-3 sm:py-4 flex justify-between items-center"
           aria-label="Main navigation"
         >
-          <h1 className="text-xl sm:text-2xl font-bold">
+          {/*
+            Wordmark per DESIGN.md § 14. The Fraunces medium weight carries the
+            visual heft, so the outer heading drops font-bold; the gilt
+            gradient and tracking-tight come straight from the spec.
+          */}
+          <h1 className="text-xl sm:text-2xl">
             <Link
               href="/"
               className="flex items-center gap-2 text-primary hover:text-primary/80 transition-colors"
-              aria-label="Starter Kit - Go to homepage"
+              aria-label="UniqueMe - Go to homepage"
             >
               <div
-                className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10"
+                className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/30 flex items-center justify-center"
                 aria-hidden="true"
               >
-                <Bot className="h-5 w-5" />
+                <Bot className="size-5" />
               </div>
-              <span className="bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">
-                Starter Kit
+              <span className="font-fraunces font-medium tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+                UniqueMe
               </span>
             </Link>
           </h1>
           <div className="flex items-center gap-2 sm:gap-4" role="group" aria-label="User actions">
             <UserProfile />
-            <ModeToggle />
           </div>
         </nav>
       </header>

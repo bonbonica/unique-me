@@ -1,23 +1,8 @@
-import { GitHubStars } from "./ui/github-stars";
-
 export function SiteFooter() {
   return (
-    <footer className="border-t py-4 sm:py-6 text-center text-sm text-muted-foreground">
-      <div className="container mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-col items-center space-y-3">
-          <GitHubStars repo="leonvanzyl/agentic-coding-starter-kit" />
-          <p>
-            Built using Agentic Coding Boilerplate by{" "}
-            <a
-              href="https://youtube.com/@leonvanzyl"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-primary hover:underline"
-            >
-              Leon van Zyl
-            </a>
-          </p>
-        </div>
+    <footer className="border-t border-border" role="contentinfo">
+      <div className="container mx-auto px-5 sm:px-8 lg:px-12 py-8 sm:py-10 text-center text-sm text-muted-foreground">
+        <p>© 2026 BonBonica LLC</p>
       </div>
     </footer>
   );
