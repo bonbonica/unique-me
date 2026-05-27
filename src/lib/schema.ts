@@ -1,4 +1,13 @@
-import { pgTable, text, timestamp, boolean, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  timestamp,
+  boolean,
+  integer,
+  jsonb,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 
 // IMPORTANT! ID fields should ALWAYS use UUID types, EXCEPT the BetterAuth tables.
 
@@ -80,3 +89,328 @@ export const verification = pgTable("verification", {
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
 });
+
+// =============================================================================
+// UniqueMe application tables
+// =============================================================================
+//
+// Conventions (per AGENTS.md):
+// - All non-BetterAuth tables use UUID primary keys generated client-side via
+//   crypto.randomUUID(). We use text() with $defaultFn for portability across
+//   drivers (works without the pgcrypto extension being explicitly required).
+// - All userId foreign keys reference user.id with onDelete: "cascade".
+// - Enum-like columns are stored as text() and constrained at the service layer
+//   via the union types exported at the bottom of this file. This is easier to
+//   evolve than pg native enums (which require migrations to add values).
+// - All tables get createdAt; tables that mutate also get updatedAt with
+//   $onUpdate(() => new Date()).
+// - Column names are snake_case in the DB; TS properties are camelCase.
+
+/**
+ * Shape of the JSON object returned by the website analyzer (Phase 1).
+ * Stored verbatim on the profile so post-generation prompts (Phase 2+) can
+ * draw on it without re-scraping.
+ */
+export type WebsiteAnalysis = {
+  businessSummary: string;
+  servicesOffered: string[];
+  targetAudience: string;
+  brandTone: string;
+  uniqueSellingPoints: string[];
+  suggestedTopics: string[];
+};
+
+export const profiles = pgTable(
+  "profiles",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    businessName: text("business_name").notNull(),
+    websiteUrl: text("website_url"),
+    // JSONB so we can index/query individual keys later if needed.
+    websiteAnalysis: jsonb("website_analysis").$type<WebsiteAnalysis>(),
+    businessType: text("business_type").notNull(),
+    businessDescription: text("business_description").notNull(),
+    // Union-typed at the application layer: "casual" | "professional" | "mix".
+    tonePreference: text("tone_preference").notNull(),
+    // Subset of ["facebook", "instagram", "linkedin"]. At least one required
+    // (validated in the service layer, not at the DB).
+    platforms: text("platforms").array().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // One profile per user. Enforced at the DB so a race can never produce
+    // duplicate rows even if the service-layer check misses.
+    uniqueIndex("profiles_user_id_unique").on(table.userId),
+  ]
+);
+
+export const weeklyBatches = pgTable(
+  "weekly_batches",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    theme: text("theme").notNull(),
+    importantThing: text("important_thing").notNull(),
+    totalPosts: integer("total_posts").default(7).notNull(),
+    acceptedPosts: integer("accepted_posts").default(0).notNull(),
+    skippedPosts: integer("skipped_posts").default(0).notNull(),
+    // Union: "in_progress" | "reviewing" | "scheduling" | "scheduled" | "completed".
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [index("weekly_batches_user_id_idx").on(table.userId)]
+);
+
+export const posts = pgTable(
+  "posts",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a batch removes its posts.
+    batchId: text("batch_id")
+      .notNull()
+      .references(() => weeklyBatches.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    postText: text("post_text").notNull(),
+    hashtags: text("hashtags").array().notNull(),
+    // 1-7. Bounds are validated in the service layer, not at the DB, so we
+    // can adjust the batch size in future without a migration.
+    postOrder: integer("post_order").notNull(),
+    // Union: "draft" | "accepted" | "edited" | "skipped".
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("posts_batch_id_idx").on(table.batchId),
+    index("posts_user_id_idx").on(table.userId),
+  ]
+);
+
+export const postImages = pgTable(
+  "post_images",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a post removes its images.
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    imageUrl: text("image_url").notNull(),
+    imagePrompt: text("image_prompt").notNull(),
+    attempt: integer("attempt").default(1).notNull(),
+    selected: boolean("selected").default(false).notNull(),
+    // Union: "ai" | "uploaded" | "library".
+    source: text("source").notNull(),
+    publishedAt: timestamp("published_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("post_images_post_id_idx").on(table.postId),
+    index("post_images_user_id_idx").on(table.userId),
+  ]
+);
+
+export const subscriptions = pgTable(
+  "subscriptions",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Union: "free_trial" | "starter" | "pro".
+    plan: text("plan").notNull(),
+    // Union: "trial" | "active" | "cancelled" | "expired".
+    status: text("status").notNull(),
+    trialStartDate: timestamp("trial_start_date").notNull(),
+    trialEndDate: timestamp("trial_end_date").notNull(),
+    // Union: "monthly" | "yearly" (nullable while on trial).
+    billingCycle: text("billing_cycle"),
+    postsUsedThisMonth: integer("posts_used_this_month").default(0).notNull(),
+    regenerationsDuringTrial: integer("regenerations_during_trial")
+      .default(0)
+      .notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // One subscription row per user (active or otherwise).
+    uniqueIndex("subscriptions_user_id_unique").on(table.userId),
+  ]
+);
+
+export const connectedAccounts = pgTable(
+  "connected_accounts",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Union: "facebook" | "instagram" | "linkedin".
+    platform: text("platform").notNull(),
+    // Tokens are encrypted (AES-256-GCM, ENCRYPTION_KEY env). Phase 5+.
+    accessTokenEncrypted: text("access_token_encrypted").notNull(),
+    refreshTokenEncrypted: text("refresh_token_encrypted"),
+    tokenExpiresAt: timestamp("token_expires_at"),
+    accountName: text("account_name").notNull(),
+    // Union: "active" | "expired" | "disconnected".
+    status: text("status").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
+  },
+  (table) => [
+    // A user connects each platform at most once.
+    uniqueIndex("connected_accounts_user_platform_unique").on(
+      table.userId,
+      table.platform
+    ),
+  ]
+);
+
+export const scheduledPosts = pgTable(
+  "scheduled_posts",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a post removes its schedule entries.
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // set null: if the user disconnects an account, the scheduled post should
+    // fail loudly at publish time rather than vanish silently.
+    connectedAccountId: text("connected_account_id").references(
+      () => connectedAccounts.id,
+      { onDelete: "set null" }
+    ),
+    // Union: "facebook" | "instagram" | "linkedin".
+    platform: text("platform").notNull(),
+    scheduledTime: timestamp("scheduled_time").notNull(),
+    // Union: "pending" | "posted" | "failed".
+    status: text("status").notNull(),
+    retryCount: integer("retry_count").default(0).notNull(),
+    postedAt: timestamp("posted_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("scheduled_posts_user_id_idx").on(table.userId),
+    index("scheduled_posts_post_id_idx").on(table.postId),
+    // The cron job (Phase 4) queries by status + scheduledTime.
+    index("scheduled_posts_status_scheduled_time_idx").on(
+      table.status,
+      table.scheduledTime
+    ),
+  ]
+);
+
+export const postLogs = pgTable(
+  "post_logs",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // set null: preserve audit history even if the source rows are deleted.
+    scheduleId: text("schedule_id").references(() => scheduledPosts.id, {
+      onDelete: "set null",
+    }),
+    postId: text("post_id").references(() => posts.id, {
+      onDelete: "set null",
+    }),
+    platform: text("platform"),
+    // Union: "posted" | "failed" | "retried" | "scheduled" | "cancelled".
+    action: text("action").notNull(),
+    // Free-form structured detail (error message, response payload, etc.).
+    details: jsonb("details"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("post_logs_schedule_id_idx").on(table.scheduleId),
+    index("post_logs_post_id_idx").on(table.postId),
+  ]
+);
+
+// =============================================================================
+// Inferred row types
+// =============================================================================
+
+export type Profile = typeof profiles.$inferSelect;
+export type NewProfile = typeof profiles.$inferInsert;
+
+export type WeeklyBatch = typeof weeklyBatches.$inferSelect;
+export type NewWeeklyBatch = typeof weeklyBatches.$inferInsert;
+
+export type Post = typeof posts.$inferSelect;
+export type NewPost = typeof posts.$inferInsert;
+
+export type PostImage = typeof postImages.$inferSelect;
+export type NewPostImage = typeof postImages.$inferInsert;
+
+export type Subscription = typeof subscriptions.$inferSelect;
+export type NewSubscription = typeof subscriptions.$inferInsert;
+
+export type ConnectedAccount = typeof connectedAccounts.$inferSelect;
+export type NewConnectedAccount = typeof connectedAccounts.$inferInsert;
+
+export type ScheduledPost = typeof scheduledPosts.$inferSelect;
+export type NewScheduledPost = typeof scheduledPosts.$inferInsert;
+
+export type PostLog = typeof postLogs.$inferSelect;
+export type NewPostLog = typeof postLogs.$inferInsert;
+
+// =============================================================================
+// Application-level union types for enum-like text columns
+// =============================================================================
+
+export type TonePreference = "casual" | "professional" | "mix";
+export type Platform = "facebook" | "instagram" | "linkedin";
+export type BatchStatus =
+  | "in_progress"
+  | "reviewing"
+  | "scheduling"
+  | "scheduled"
+  | "completed";
+export type PostStatus = "draft" | "accepted" | "edited" | "skipped";
+export type ImageSource = "ai" | "uploaded" | "library";
+export type SubscriptionPlan = "free_trial" | "starter" | "pro";
+export type SubscriptionStatus = "trial" | "active" | "cancelled" | "expired";
+export type BillingCycle = "monthly" | "yearly";
+export type ConnectedAccountStatus = "active" | "expired" | "disconnected";
+export type ScheduledPostStatus = "pending" | "posted" | "failed";
+export type PostLogAction =
+  | "posted"
+  | "failed"
+  | "retried"
+  | "scheduled"
+  | "cancelled";

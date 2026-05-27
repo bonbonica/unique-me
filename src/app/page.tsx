@@ -115,7 +115,7 @@ export default function Home() {
                 size="lg"
                 className="rounded-full glow-champagne mt-10"
               >
-                <Link href="/register">
+                <Link href="/login">
                   Start Free Trial — No Credit Card
                 </Link>
               </Button>
@@ -246,7 +246,7 @@ export default function Home() {
                   variant={plan.featured ? "default" : "secondary"}
                   className="w-full rounded-full"
                 >
-                  <Link href="/register">{plan.cta}</Link>
+                  <Link href="/login">{plan.cta}</Link>
                 </Button>
               </div>
             ))}
@@ -264,7 +264,7 @@ export default function Home() {
               Your first week takes five minutes. The rest happens on its own.
             </p>
             <Button asChild size="lg" className="rounded-full mt-10">
-              <Link href="/register">Begin your free week</Link>
+              <Link href="/login">Begin your free week</Link>
             </Button>
           </div>
         </div>

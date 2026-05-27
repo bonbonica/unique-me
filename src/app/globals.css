@@ -44,6 +44,57 @@
 :root {
   --radius: 0.875rem;
 
+  /*
+    Light mode — warm cream + antique brass.
+    A daylight alternative to the dark Midnight + Champagne identity.
+    The gold accent stays, but shifts to a deeper antique-brass tone so
+    primary actions clear WCAG AA on the cream surface.
+  */
+  --background: oklch(0.95 0.015 85);
+  --foreground: oklch(0.22 0.025 50);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.22 0.025 50);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.22 0.025 50);
+
+  --primary: oklch(0.6 0.1 70);
+  --primary-foreground: oklch(0.99 0.005 85);
+
+  --secondary: oklch(0.91 0.025 75);
+  --secondary-foreground: oklch(0.22 0.025 50);
+
+  --accent: oklch(0.86 0.06 78);
+  --accent-foreground: oklch(0.22 0.025 50);
+
+  --muted: oklch(0.93 0.018 75);
+  --muted-foreground: oklch(0.45 0.018 50);
+
+  --border: oklch(0.85 0.018 75);
+  --input: oklch(0.88 0.02 75);
+  --ring: oklch(0.6 0.1 70);
+
+  /*
+    Softened destructive for light mode — a deeper coral/rust that
+    stays inside the warm palette family and clears AA on cream.
+  */
+  --destructive: oklch(0.5 0.17 30);
+  --destructive-foreground: oklch(0.99 0.005 85);
+
+  /*
+    Champagne glow swaps per theme. In light mode the glow becomes
+    a deeper brass tone so it remains visible against cream surfaces.
+  */
+  --shadow-glow-color: 0.6 0.1 70;
+}
+
+.dark {
+  /*
+    Dark mode — Midnight + Champagne (brand default).
+    Every brand decision started here; the light variant is an
+    alternative, not a replacement.
+  */
   --background: oklch(0.16 0.025 265);
   --foreground: oklch(0.95 0.015 85);
 
@@ -69,8 +120,16 @@
   --input: oklch(0.32 0.03 265);
   --ring: oklch(0.79 0.07 75);
 
-  --destructive: oklch(0.55 0.12 25);
-  --destructive-foreground: oklch(0.95 0.015 85);
+  /*
+    Softened destructive for dark mode — peachy coral instead of
+    a saturated red, sitting closer to the gold family while keeping
+    AA contrast on midnight.
+  */
+  --destructive: oklch(0.72 0.12 35);
+  --destructive-foreground: oklch(0.16 0.025 265);
+
+  /* Champagne glow color used by .glow-champagne. */
+  --shadow-glow-color: 0.79 0.07 75;
 }
 
 @keyframes fade-in {
@@ -129,10 +188,15 @@
     @apply -translate-y-0.5;
   }
 
+  /*
+    Auth background uses the active mode's primary tone at low alpha.
+    On cream the gradient is gentler — alpha is reduced via the lighter
+    primary already carrying less visual weight at the same opacity.
+  */
   .auth-bg {
     background-image: radial-gradient(
       ellipse at 50% 0%,
-      oklch(0.79 0.07 75 / 0.08) 0%,
+      oklch(var(--shadow-glow-color) / 0.08) 0%,
       transparent 60%
     );
   }
@@ -148,11 +212,16 @@
     color: transparent;
   }
 
+  /*
+    Champagne glow — the color swaps per theme via --shadow-glow-color
+    so the effect reads as champagne on midnight and antique brass on
+    cream, never invisible.
+  */
   .glow-champagne {
-    box-shadow: 0 0 32px -8px oklch(0.79 0.07 75 / 0.25);
+    box-shadow: 0 0 32px -8px oklch(var(--shadow-glow-color) / 0.25);
   }
   .glow-champagne:hover {
-    box-shadow: 0 0 32px -8px oklch(0.79 0.07 75 / 0.4);
+    box-shadow: 0 0 32px -8px oklch(var(--shadow-glow-color) / 0.4);
   }
   @media (prefers-reduced-motion: no-preference) {
     .glow-champagne {

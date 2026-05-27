@@ -26,7 +26,6 @@ The UI must make the business owner feel like they have hired a high-end service
 - Not crypto / web3 neon-on-black.
 - Not playful or illustrated. Personality comes from typography, restraint, and a single gilt accent.
 - Not bright. Avoid pure white surfaces, saturated chart colors, or rainbow gradients.
-- Not light mode (in this phase). The champagne palette is designed for midnight; it loses identity on cream.
 
 ---
 
@@ -37,16 +36,16 @@ The UI must make the business owner feel like they have hired a high-end service
 - **Components:** shadcn/ui (new-york style)
 - **Icons:** Lucide React (default stroke width: `1.5`)
 - **Fonts:** Geist (sans, UI/body) + Geist Mono (mono, code) + **Fraunces** (display serif, headlines) via `next/font/google`
-- **Theme:** Dark only. The `next-themes` provider is configured with `forcedTheme="dark"`; no toggle is exposed in the UI.
+- **Theme:** Dark by default, with a light variant. Theme persists across visits via `next-themes`.
 - **Utilities:** `cn()` from `@/lib/utils` (clsx + tailwind-merge)
 
 ---
 
 ## 3. Colors
 
-UniqueMe runs on a single palette: **Midnight + Champagne**. Deep midnight navy backgrounds, pale champagne and blush gold accents, warm ivory text. All values use the **oklch** color space and are defined as CSS custom properties in `globals.css`, bridged to Tailwind via `@theme inline`.
+UniqueMe ships two palettes that share the same gold-accent identity: **Midnight + Champagne** (dark, the brand default — every visual decision started here) and a warm-cream alternative for light mode. The light palette swaps the pale champagne primary for a deeper **antique brass** so primary actions stay legible on cream surfaces. All values use the **oklch** color space and are defined as CSS custom properties in `globals.css`, bridged to Tailwind via `@theme inline`.
 
-### Semantic tokens (dark only)
+### Dark mode tokens (brand default)
 
 | Token | Hex reference | oklch value | Usage |
 |---|---|---|---|
@@ -67,8 +66,32 @@ UniqueMe runs on a single palette: **Midnight + Champagne**. Deep midnight navy 
 | `border` | `#232A3C` | `oklch(0.28 0.025 265)` | Navy hairline borders, dividers |
 | `input` | `#2A3147` | `oklch(0.32 0.03 265)` | Input borders |
 | `ring` | `#D9B68C` | `oklch(0.79 0.07 75)` | Champagne focus ring |
-| `destructive` | `#B5605A` | `oklch(0.55 0.12 25)` | Muted coral-red — error states, destructive actions |
-| `destructive-foreground` | `#F2EEE6` | `oklch(0.95 0.015 85)` | Ivory on destructive |
+| `destructive` | warm coral | `oklch(0.72 0.12 35)` | Peachy-coral error state — kept inside the gold family, softer than a saturated red |
+| `destructive-foreground` | `#0E1320` | `oklch(0.16 0.025 265)` | Midnight text on destructive |
+
+### Light mode tokens
+
+| Token | Hex reference | oklch value | Usage |
+|---|---|---|---|
+| `background` | warm cream | `oklch(0.95 0.015 85)` | Warm-cream page background |
+| `foreground` | warm near-black | `oklch(0.22 0.025 50)` | Primary text |
+| `card` | pure white | `oklch(1 0 0)` | Raised surface — cards, dialogs |
+| `card-foreground` | warm near-black | `oklch(0.22 0.025 50)` | Text on cards |
+| `popover` | pure white | `oklch(1 0 0)` | Dropdowns, popovers |
+| `popover-foreground` | warm near-black | `oklch(0.22 0.025 50)` | Text on popovers |
+| `primary` | antique brass | `oklch(0.6 0.1 70)` | Deeper champagne for AA contrast on cream — CTAs, focus |
+| `primary-foreground` | cream | `oklch(0.99 0.005 85)` | Cream text on brass |
+| `secondary` | warm tan | `oklch(0.91 0.025 75)` | Secondary buttons, subtle chips |
+| `secondary-foreground` | warm near-black | `oklch(0.22 0.025 50)` | Text on secondary |
+| `accent` | blush gold | `oklch(0.86 0.06 78)` | Hover states, highlights |
+| `accent-foreground` | warm near-black | `oklch(0.22 0.025 50)` | Text on accent |
+| `muted` | subtle cream | `oklch(0.93 0.018 75)` | Subdued surface — input backgrounds, soft fills |
+| `muted-foreground` | warm gray | `oklch(0.45 0.018 50)` | Captions, placeholders |
+| `border` | warm tan hairline | `oklch(0.85 0.018 75)` | Borders, dividers |
+| `input` | tan input border | `oklch(0.88 0.02 75)` | Input borders (slightly stronger than `border`) |
+| `ring` | antique brass | `oklch(0.6 0.1 70)` | Brass focus ring |
+| `destructive` | deep coral / rust | `oklch(0.5 0.17 30)` | Softened destructive — sits in the warm family, clears AA on cream |
+| `destructive-foreground` | cream | `oklch(0.99 0.005 85)` | Cream text on destructive |
 
 ### Elevation by lightness
 
@@ -121,13 +144,12 @@ These sit outside the core token system but must stay tonally consistent with th
 
 - **Success:** `text-emerald-300` / `bg-emerald-500/20` — muted, never bright spring green
 - **Warning:** `text-amber-300` / `bg-amber-500/20` — sits in the gold family
-- **Error:** `text-destructive` (token) — the muted coral-red, not pure red
+- **Error:** `text-destructive` (token) — the warm coral (peachy in dark, rust in light), not a saturated red
 
 ### Tokens we deliberately do NOT define
 
 - Sidebar tokens — no sidebar in v1
 - Chart tokens — defer until the dashboard ships
-- A light-mode variant — a future brand conversation, not a token swap
 
 ---
 
@@ -522,17 +544,29 @@ Respect `prefers-reduced-motion: reduce` globally — disable the champagne glow
 
 UniqueMe is mobile-first and WCAG AA at minimum. Every component must satisfy:
 
-### Contrast (verified against the palette)
+### Contrast (verified against both palettes)
+
+**Dark mode**
 
 | Combination | Ratio | Verdict |
 |---|---|---|
-| Ivory `#F2EEE6` on midnight `#0E1320` | ≈ 14.5:1 | AAA ✓ |
-| Champagne `#D9B68C` on midnight `#0E1320` | ≈ 9.4:1 | AAA ✓ |
-| Midnight `#0E1320` on champagne `#D9B68C` (CTA text) | ≈ 9.4:1 | AAA ✓ |
-| Slate caption `#6E7388` on midnight `#0E1320` | ≈ 4.6:1 | AA for **large text only** — never use for body |
-| Destructive `#B5605A` on midnight `#0E1320` | ≈ 4.7:1 | AA ✓ |
+| Ivory foreground on midnight background | ≈ 14.5:1 | AAA ✓ |
+| Champagne primary on midnight background | ≈ 9.4:1 | AAA ✓ |
+| Midnight on champagne (CTA text) | ≈ 9.4:1 | AAA ✓ |
+| Slate `muted-foreground` on midnight background | ≈ 4.6:1 | AA for **large text only** — never use for body |
+| Destructive `oklch(0.72 0.12 35)` on midnight background | ≈ 8.0:1 | AAA ✓ |
 
-If a new color is proposed, run it through a contrast checker against both `background` and `card` before adding.
+**Light mode**
+
+| Combination | Ratio | Verdict |
+|---|---|---|
+| Warm near-black foreground on cream background | ≈ 12.6:1 | AAA ✓ |
+| Antique-brass primary on cream background | ≈ 4.8:1 | AA ✓ — clears AA for normal text |
+| Cream on antique brass (CTA text) | ≈ 4.8:1 | AA ✓ |
+| Warm-gray `muted-foreground` on cream background | ≈ 4.5:1 | AA borderline — keep to **`text-sm` or larger**, never below 14px |
+| Destructive `oklch(0.5 0.17 30)` on cream background | ≈ 5.9:1 | AA ✓ |
+
+If a new color is proposed, run it through a contrast checker against both `background` and `card` in **both modes** before adding.
 
 ### Touch & input
 
@@ -560,11 +594,9 @@ If a new color is proposed, run it through a contrast checker against both `back
 
 ---
 
-## 13. Dark Mode
+## 13. Theme
 
-UniqueMe is dark-only. The `next-themes` provider is configured with `forcedTheme="dark"`, no toggle is exposed, and `globals.css` defines tokens directly on `:root` (no `.dark` selector branching).
-
-A light-mode variant would require a brand-level conversation — the champagne palette is identity-defining and loses most of its luxury cue on cream backgrounds. Do not add a light variant without that conversation.
+UniqueMe ships with dark and light themes. Dark is the default — every brand decision started there — and the toggle lives in the global site header (`<ThemeToggle />`). Preference persists via `next-themes`. The light variant is a warm-cream alternative; both share the same gold-accent identity, with the primary tone shifting from pale champagne (dark) to antique brass (light) for contrast.
 
 ---
 
@@ -599,6 +631,5 @@ Hero variant: `w-14 h-14 rounded-2xl` with the icon at `size-7` in `text-primary
 
 - **Logo / wordmark asset:** This system reserves the slot but doesn't produce the SVG.
 - **Marketing imagery:** Photography direction (warm, low-key lighting, real businesses — not stock) belongs in a separate brand guide once we have one.
-- **Light mode:** Out of scope this phase. Future brand conversation required.
 - **Charts / data viz:** Out of scope until the dashboard ships. Will reuse the gold/peach family.
 - **Sidebar:** Out of scope until the app introduces one.

@@ -106,14 +106,15 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} antialiased min-h-screen flex flex-col`}
       >
         {/*
-          UniqueMe is dark-only by design (DESIGN.md § 2). We pin next-themes
-          to "dark" via forcedTheme so any stray client toggle or system
-          preference cannot escape the Midnight + Champagne palette.
+          UniqueMe defaults to dark (the brand-defining Midnight + Champagne
+          palette) but ships a light variant. next-themes persists the user's
+          choice across visits via localStorage. We intentionally omit
+          `enableSystem` — the spec is "default to dark, respect chosen
+          preference," not "follow the OS."
         */}
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
-          forcedTheme="dark"
           disableTransitionOnChange
         >
           <SiteHeader />

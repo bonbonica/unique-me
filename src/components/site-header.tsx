@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { Bot } from "lucide-react";
 import { UserProfile } from "@/components/auth/user-profile";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 export function SiteHeader() {
   return (
@@ -40,6 +41,12 @@ export function SiteHeader() {
             </Link>
           </h1>
           <div className="flex items-center gap-2 sm:gap-4" role="group" aria-label="User actions">
+            {/*
+              ThemeToggle ships globally — visible on every route, signed in
+              or not. Placed before UserProfile so the avatar stays the
+              right-most affordance.
+            */}
+            <ThemeToggle />
             <UserProfile />
           </div>
         </nav>

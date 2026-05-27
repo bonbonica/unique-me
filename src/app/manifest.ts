@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Agentic Coding Boilerplate",
-    short_name: "Agentic",
+    name: "UniqueMe",
+    short_name: "UniqueMe",
     description:
-      "Complete agentic coding boilerplate with authentication, database, AI integration, and modern tooling",
+      "AI social-media post generator and auto-poster for small business owners.",
     start_url: "/",
     display: "standalone",
     background_color: "#ffffff",

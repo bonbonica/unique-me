@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { User, LogOut } from "lucide-react";
+import { Settings, LogOut } from "lucide-react";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,7 +32,9 @@ export function UserProfile() {
           </Button>
         </Link>
         <Link href="/register">
-          <Button size="sm">Sign up</Button>
+          <Button size="sm" className="rounded-full">
+            Sign up
+          </Button>
         </Link>
       </div>
     );
@@ -75,9 +77,9 @@ export function UserProfile() {
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
-          <Link href="/profile" className="flex items-center">
-            <User className="mr-2 h-4 w-4" />
-            Your Profile
+          <Link href="/settings" className="flex items-center">
+            <Settings className="mr-2 size-4" />
+            Settings
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />

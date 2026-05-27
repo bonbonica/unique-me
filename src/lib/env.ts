@@ -13,13 +13,28 @@ const serverEnvSchema = z.object({
     .string()
     .min(32, "BETTER_AUTH_SECRET must be at least 32 characters"),
 
-  // OAuth
+  // OAuth — Google is an optional sign-in method alongside email/password.
+  // When unset, the login page hides the Google button and shows only the
+  // email/password form. Both vars must be set to register the provider.
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
   // AI
-  OPENROUTER_API_KEY: z.string().optional(),
-  OPENROUTER_MODEL: z.string().default("openai/gpt-5-mini"),
+  // Anthropic powers website analysis (Phase 1) and post generation (Phase 2+).
+  // Required in all environments — there is no graceful fallback for these
+  // features without the API key.
+  ANTHROPIC_API_KEY: z.string().min(1, "ANTHROPIC_API_KEY is required"),
+  // Firecrawl is used to scrape user-supplied business websites during
+  // onboarding. Optional in dev so contributors without a Firecrawl account
+  // can still work on UI; the scraper short-circuits to null when missing.
+  FIRECRAWL_API_KEY: z.string().optional(),
+  // OpenAI is reserved for Phase 3 (image generation / DALL·E). Optional in
+  // dev for the same reason as Firecrawl.
+  OPENAI_API_KEY: z.string().optional(),
+  // 32-byte base64 key for AES-256-GCM at-rest encryption of OAuth tokens
+  // stored on connected_accounts (Phase 5+). Optional in dev because Phase 1
+  // never reads or writes connected_accounts.
+  ENCRYPTION_KEY: z.string().optional(),
 
   // Storage
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
@@ -80,17 +95,24 @@ export function getClientEnv(): ClientEnv {
 }
 
 /**
- * Checks if required environment variables are set.
- * Logs warnings for missing optional variables.
+ * Returns true when both Google OAuth credentials are present, so callers can
+ * conditionally render the "Continue with Google" button. The login/register
+ * pages use this to decide whether to show the social provider section above
+ * the email/password form.
  */
 export function isGoogleOAuthConfigured(): boolean {
   return Boolean(
-    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
-  )
+    process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
+  );
 }
 
+/**
+ * Checks if required environment variables are set.
+ * Logs warnings for missing optional variables.
+ */
 export function checkEnv(): void {
   const warnings: string[] = [];
+  const isProduction = process.env.NODE_ENV === "production";
 
   // Check required variables
   if (!process.env.POSTGRES_URL) {
@@ -101,13 +123,45 @@ export function checkEnv(): void {
     throw new Error("BETTER_AUTH_SECRET is required");
   }
 
-  // Check optional variables and warn
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-    warnings.push("Google OAuth is not configured. Social login will be disabled.");
+  if (!process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY is required");
   }
 
-  if (!process.env.OPENROUTER_API_KEY) {
-    warnings.push("OPENROUTER_API_KEY is not set. AI chat will not work.");
+  // Google OAuth is optional. Both vars must be set to enable the social
+  // provider; otherwise the app silently falls back to email/password only.
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    warnings.push(
+      "Google OAuth is not configured. Only email/password sign-in will be available."
+    );
+  }
+
+  // Production-only required vars. In development we warn so contributors can
+  // work on non-AI parts of the app without needing every third-party key.
+  if (!process.env.FIRECRAWL_API_KEY) {
+    if (isProduction) {
+      throw new Error("FIRECRAWL_API_KEY is required in production");
+    }
+    warnings.push(
+      "FIRECRAWL_API_KEY is not set. Website scraping during onboarding will be skipped."
+    );
+  }
+
+  if (!process.env.OPENAI_API_KEY) {
+    if (isProduction) {
+      throw new Error("OPENAI_API_KEY is required in production");
+    }
+    warnings.push(
+      "OPENAI_API_KEY is not set. AI image generation (Phase 3) will not work."
+    );
+  }
+
+  if (!process.env.ENCRYPTION_KEY) {
+    if (isProduction) {
+      throw new Error("ENCRYPTION_KEY is required in production");
+    }
+    warnings.push(
+      "ENCRYPTION_KEY is not set. Social-account token encryption (Phase 5+) will not work."
+    );
   }
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
