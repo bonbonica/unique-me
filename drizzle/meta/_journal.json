@@ -22,6 +22,13 @@
       "when": 1779819083652,
       "tag": "0002_salty_sharon_ventura",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1779936387829,
+      "tag": "0003_shocking_jetstream",
+      "breakpoints": true
     }
   ]
 }

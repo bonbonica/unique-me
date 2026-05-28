@@ -1,4 +1,5 @@
 import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
+import { TrialStrip } from "@/components/dashboard/trial-strip";
 
 /**
  * Human-readable label per plan value. Kept in one map so future plan
@@ -37,13 +38,13 @@ export function DashboardTopBar({
       {/*
         Trial countdown only shows when the user is actively on the trial.
         Paid/expired states already convey their meaning via the plan pill.
+        The TrialStrip is a styled pill (champagne badge + Sparkles icon) per
+        Phase 2 spec § 8.3, replacing the plain "X days left" text used in
+        Phase 1.
       */}
       {subscription.status === "trial" &&
       subscription.daysLeftInTrial !== null ? (
-        <span className="text-xs text-muted-foreground">
-          {subscription.daysLeftInTrial}{" "}
-          {subscription.daysLeftInTrial === 1 ? "day" : "days"} left
-        </span>
+        <TrialStrip daysLeft={subscription.daysLeftInTrial} />
       ) : null}
 
       {/*

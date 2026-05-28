@@ -192,13 +192,95 @@ export const posts = pgTable(
     // 1-7. Bounds are validated in the service layer, not at the DB, so we
     // can adjust the batch size in future without a migration.
     postOrder: integer("post_order").notNull(),
-    // Union: "draft" | "accepted" | "edited" | "skipped".
+    // Union: "draft" | "accepted" | "edited" | "skipped". Phase 2 writes only
+    // "draft" (initial) and "edited" (after update/regenerate); the "accepted"
+    // and "skipped" values stay in the union for backwards compatibility but
+    // are not produced by Phase 2 code (selection state superseded them).
     status: text("status").notNull(),
+    // Per-post regeneration support (Phase 2). `feedback` holds the free-text
+    // note the user typed when clicking "Regenerate this post"; passed to
+    // Claude on the regenerate call. `regenerationCount` is bumped only by
+    // postService.regenerate and is the universal 1x cap (D11) enforcement
+    // column — all plans, all users, no exceptions.
+    feedback: text("feedback"),
+    regenerationCount: integer("regeneration_count").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     index("posts_batch_id_idx").on(table.batchId),
     index("posts_user_id_idx").on(table.userId),
+  ]
+);
+
+/**
+ * Per-post text variations for Instagram and LinkedIn (Phase 2). The canonical
+ * Facebook caption lives on `posts.postText`; this table holds the
+ * platform-adapted rewrites. Pro users get both; Starter users get none
+ * (Phase 3 will gate the insert site). Facebook IS NOT a valid platform here
+ * — see VariationPlatform type.
+ */
+export const postVariations = pgTable(
+  "post_variations",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a post removes its variations.
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Union: "instagram" | "linkedin" (VariationPlatform).
+    platform: text("platform").notNull(),
+    postText: text("post_text").notNull(),
+    hashtags: text("hashtags").array().notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // A post has at most one variation per platform.
+    uniqueIndex("post_variations_post_platform_unique").on(
+      table.postId,
+      table.platform
+    ),
+    index("post_variations_user_id_idx").on(table.userId),
+  ]
+);
+
+/**
+ * Per-post-per-network user opt-in selections (Phase 2). Row presence = the
+ * user wants this post published on this network. Row absence = don't post.
+ * Mutable while the parent batch is in status "reviewing"; frozen once the
+ * batch transitions to "scheduling" or later.
+ *
+ * Facebook IS a valid platform here (unlike post_variations) — selecting FB
+ * is an explicit user opt-in per D14, never a default.
+ */
+export const postSelections = pgTable(
+  "post_selections",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a post removes its selections.
+    postId: text("post_id")
+      .notNull()
+      .references(() => posts.id, { onDelete: "cascade" }),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Union: "facebook" | "instagram" | "linkedin" (SelectionPlatform).
+    platform: text("platform").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // A post is selected per-platform at most once.
+    uniqueIndex("post_selections_post_platform_unique").on(
+      table.postId,
+      table.platform
+    ),
+    index("post_selections_user_id_idx").on(table.userId),
   ]
 );
 
@@ -377,6 +459,12 @@ export type NewPost = typeof posts.$inferInsert;
 export type PostImage = typeof postImages.$inferSelect;
 export type NewPostImage = typeof postImages.$inferInsert;
 
+export type PostVariation = typeof postVariations.$inferSelect;
+export type NewPostVariation = typeof postVariations.$inferInsert;
+
+export type PostSelection = typeof postSelections.$inferSelect;
+export type NewPostSelection = typeof postSelections.$inferInsert;
+
 export type Subscription = typeof subscriptions.$inferSelect;
 export type NewSubscription = typeof subscriptions.$inferInsert;
 
@@ -395,12 +483,21 @@ export type NewPostLog = typeof postLogs.$inferInsert;
 
 export type TonePreference = "casual" | "professional" | "mix";
 export type Platform = "facebook" | "instagram" | "linkedin";
+// Mirrors Platform value-wise but names the per-post selection concept. Same
+// union, different intent — use SelectionPlatform when the value represents
+// "which network this specific post is opted-in for", and Platform when it
+// represents "platforms on the user's profile".
+export type SelectionPlatform = "facebook" | "instagram" | "linkedin";
+// Subset of platforms that receive per-post text variations. Facebook is
+// the canonical row on posts and never appears here.
+export type VariationPlatform = "instagram" | "linkedin";
 export type BatchStatus =
   | "in_progress"
   | "reviewing"
   | "scheduling"
   | "scheduled"
-  | "completed";
+  | "completed"
+  | "cancelled";
 export type PostStatus = "draft" | "accepted" | "edited" | "skipped";
 export type ImageSource = "ai" | "uploaded" | "library";
 export type SubscriptionPlan = "free_trial" | "starter" | "pro";
