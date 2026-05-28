@@ -10,6 +10,7 @@ import {
   type SubscriptionPlan,
   type SubscriptionStatus,
   subscriptions,
+  weeklyBatches,
 } from "@/lib/schema";
 
 /**
@@ -140,4 +141,44 @@ export async function checkSubscription(
     isActive,
     daysLeftInTrial,
   };
+}
+
+/**
+ * Generation gate — Phase 2 callers ({@link postService.generateWeekly}) use
+ * this as the single permanent home for "is the user allowed to create a
+ * weekly batch right now?". Phase 2 implements only one rule: trial users
+ * get exactly one batch total (D20). Phase 3 will expand this to plan- and
+ * credit-aware checks (Starter weekly cycle, Pro monthly limits, PAYG
+ * balance, etc.).
+ *
+ * Centralising the gate here means every future limit lands in one place
+ * rather than scattered across service methods. The check is intentionally
+ * a DB read against `weekly_batches` directly (not a call through
+ * postService) so the two services don't form an import cycle.
+ *
+ * Cancellation does NOT reset the trial-1-batch counter — a cancelled batch
+ * still counts as "the trial user's one batch" per D20.
+ */
+export async function canGenerate(userId: string): Promise<
+  | { allowed: true }
+  | { allowed: false; reason: "trial_batch_exists" }
+> {
+  const subscription = await checkSubscription(userId);
+
+  if (subscription.status === "trial") {
+    // Any existing batch — any status, including 'cancelled' — counts toward
+    // the trial cap. We select only `id` so the check stays cheap on the hot
+    // path that runs on every /create page load.
+    const row = await db.query.weeklyBatches.findFirst({
+      where: eq(weeklyBatches.userId, userId),
+      columns: { id: true },
+    });
+    if (row) {
+      return { allowed: false, reason: "trial_batch_exists" };
+    }
+  }
+
+  // TODO(phase-3-gating): Starter weekly cycle, PAYG balance, Pro monthly
+  // limits, etc. All future plan-aware checks go here.
+  return { allowed: true };
 }
