@@ -205,6 +205,15 @@ export const posts = pgTable(
     feedback: text("feedback"),
     regenerationCount: integer("regeneration_count").default(0).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Bumped automatically on every Drizzle-driven update of this row via
+    // $onUpdate (postService.update + postService.regenerate). Phase 2's
+    // /posts wizard reads this to compare against post_variations.createdAt
+    // so the IG / LinkedIn steps can surface a "this variation may be
+    // older than the canonical post" inline note (spec R12).
+    updatedAt: timestamp("updated_at")
+      .defaultNow()
+      .$onUpdate(() => /* @__PURE__ */ new Date())
+      .notNull(),
   },
   (table) => [
     index("posts_batch_id_idx").on(table.batchId),
