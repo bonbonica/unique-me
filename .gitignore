@@ -48,4 +48,8 @@ public/uploads
 # private design docs (never commit — public repo)
 UniqueMe pdf/
 
+# wave prompts — local-only by policy. CC reads + writes per-wave prompt
+# files here (phase-2-wave-N-{slug}.md, etc.); the repo never sees them.
+prompts/
+
 nul
