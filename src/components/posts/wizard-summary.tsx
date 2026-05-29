@@ -3,7 +3,10 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CheckSquare, Loader2, X } from "lucide-react";
-import { scheduleMyPickAction } from "@/app/(app)/(onboarded)/posts/actions";
+import {
+  rescheduleAction,
+  scheduleMyPickAction,
+} from "@/app/(app)/(onboarded)/posts/actions";
 import { EditDialog } from "@/components/posts/edit-dialog";
 import {
   aspectRatioFor,
@@ -64,6 +67,7 @@ export function WizardSummary({
   platforms,
   selections,
   onSetSelection,
+  mode,
 }: {
   batch: BatchForReview["batch"];
   posts: BatchForReview["posts"];
@@ -74,7 +78,21 @@ export function WizardSummary({
     platform: SelectionPlatform,
     next: boolean
   ) => void;
+  mode: "reviewing" | "cancelled";
 }) {
+  const isCancelled = mode === "cancelled";
+
+  // Copy + action swap drives the only differences between reviewing and
+  // cancelled-recoverable summary screens. Cards above the buttons render
+  // identically.
+  const headlineText = isCancelled
+    ? "Re-schedule your week"
+    : "Last step before your posts go live";
+  const subheadText = isCancelled
+    ? "Confirm to bring this batch back to scheduled."
+    : "Confirm to schedule.";
+  const ctaText = isCancelled ? "Re-schedule" : "Schedule my pick";
+  const submittingText = isCancelled ? "Re-scheduling…" : "Scheduling…";
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -108,10 +126,12 @@ export function WizardSummary({
   async function handleSchedule() {
     setSubmitting(true);
     setError(null);
-    const result = await scheduleMyPickAction(batch.id);
+    const result = isCancelled
+      ? await rescheduleAction(batch.id)
+      : await scheduleMyPickAction(batch.id);
     if (result.ok) {
-      // batch.status flips to "scheduling"; the page re-renders as
-      // <LockedSummary />. Nothing more to do here.
+      // batch.status flips to "scheduling" from either source state.
+      // The page re-renders as <LockedSummary />. Nothing more to do here.
       router.refresh();
     } else {
       setError(scheduleErrorCopy(result.error));
@@ -123,9 +143,9 @@ export function WizardSummary({
     <section className="space-y-8">
       <header className="space-y-2">
         <h2 className="font-fraunces text-2xl sm:text-3xl tracking-tight font-medium">
-          Last step before your posts go live
+          {headlineText}
         </h2>
-        <p className="text-sm text-muted-foreground">Confirm to schedule.</p>
+        <p className="text-sm text-muted-foreground">{subheadText}</p>
       </header>
 
       {/* Primary commit placement — directly below the subhead so the
@@ -135,6 +155,8 @@ export function WizardSummary({
           onClick={handleSchedule}
           disabled={submitting || isEmpty}
           submitting={submitting}
+          label={ctaText}
+          submittingLabel={submittingText}
         />
         {error ? (
           <p role="alert" className="text-destructive text-sm">
@@ -168,6 +190,8 @@ export function WizardSummary({
               onClick={handleSchedule}
               disabled={submitting || isEmpty}
               submitting={submitting}
+              label={ctaText}
+              submittingLabel={submittingText}
             />
           </div>
         </>
@@ -180,10 +204,14 @@ function ScheduleButton({
   onClick,
   disabled,
   submitting,
+  label,
+  submittingLabel,
 }: {
   onClick: () => void;
   disabled: boolean;
   submitting: boolean;
+  label: string;
+  submittingLabel: string;
 }) {
   return (
     <Button
@@ -196,12 +224,12 @@ function ScheduleButton({
       {submitting ? (
         <>
           <Loader2 className="animate-spin size-4 mr-2" aria-hidden />
-          Scheduling…
+          {submittingLabel}
         </>
       ) : (
         <>
           <CheckSquare className="size-4 mr-2" aria-hidden />
-          Schedule my pick
+          {label}
         </>
       )}
     </Button>

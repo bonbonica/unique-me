@@ -67,6 +67,14 @@ export async function scheduleMyPickAction(batchId: string) {
   return await postService.scheduleMyPick(batchId, session.user.id);
 }
 
+// Used by <WizardSummary /> when rendered in `mode="cancelled"`. Same
+// shape as scheduleMyPickAction but calls the cancelled→scheduling
+// transition. See `postService.reschedule` for the loop semantics.
+export async function rescheduleAction(batchId: string) {
+  const session = await requireSession();
+  return await postService.reschedule(batchId, session.user.id);
+}
+
 // Used by <LockedSummary /> (task-11).
 export async function stopBatchAction(batchId: string) {
   const session = await requireSession();

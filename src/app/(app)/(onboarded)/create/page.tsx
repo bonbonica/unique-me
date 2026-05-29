@@ -39,12 +39,19 @@ export default async function CreatePage() {
   );
 
   // Gate (D20): trial + any batch (incl. cancelled) → upgrade screen.
+  // We use getMostRecentBatch (any status) rather than the previous
+  // hasAnyBatch + getCurrentBatch combo so the gated screen can deep-link
+  // back to a cancelled batch — the cancelled-recoverable flow needs the
+  // user to be able to find their batch again, and getCurrentBatch
+  // intentionally hides cancelled.
   if (subscription.status === "trial") {
-    const hasBatch = await postService.hasAnyBatch(session.user.id);
-    if (hasBatch) {
-      const currentBatch = await postService.getCurrentBatch(session.user.id);
+    const mostRecent = await postService.getMostRecentBatch(session.user.id);
+    if (mostRecent) {
       return (
-        <TrialGatedScreen existingBatchId={currentBatch?.id ?? null} />
+        <TrialGatedScreen
+          existingBatchId={mostRecent.id}
+          batchStatus={mostRecent.status}
+        />
       );
     }
   }

@@ -64,7 +64,9 @@ export function WizardStep({
   selections,
   onSetSelection,
   onSelectAllForPlatform,
+  onDeselectAllForPlatform,
   onAdvance,
+  mode,
 }: {
   platform: SelectionPlatform;
   posts: BatchForReview["posts"];
@@ -76,26 +78,49 @@ export function WizardStep({
     next: boolean
   ) => void;
   onSelectAllForPlatform: (platform: SelectionPlatform) => void;
+  onDeselectAllForPlatform: (platform: SelectionPlatform) => void;
   onAdvance: () => void;
+  mode: "reviewing" | "cancelled";
 }) {
   const selectedIds = selections[platform];
   const selectedCount = selectedIds.length;
   const totalPosts = posts.length;
-  const isAllOrNone =
-    selectedCount === 0 || selectedCount === totalPosts;
+  const isAllSelected =
+    selectedCount === totalPosts && totalPosts > 0;
 
-  const bulkLabel = isAllOrNone
-    ? `Schedule all ${NETWORK_LABELS[platform]} posts`
-    : "Schedule my pick";
+  /**
+   * Three-state bulk-action button driven by the live selection count:
+   *
+   *   - **0 selected** — label "Schedule all {N} posts". Click selects
+   *     all 7 + advances to the next step. Icon inherits button color.
+   *   - **1-6 selected** — label "{N} {Network} posts scheduled". Click
+   *     just advances. Icon inherits button color. Label updates live as
+   *     the user ticks individual checkboxes.
+   *   - **7 selected** — label "7 {Network} posts scheduled". Icon flips
+   *     to destructive (orange/coral) signalling "all in — click here to
+   *     undo." Click DESELECTS all 7 and does NOT advance. This is the
+   *     key behavioural difference from 1-6: at the all-in state, the
+   *     button reverses the bulk action instead of moving on.
+   */
+  let bulkLabel: string;
+  if (selectedCount === 0) {
+    bulkLabel = `Schedule all ${NETWORK_LABELS[platform]} posts`;
+  } else {
+    bulkLabel = `${selectedCount} ${NETWORK_LABELS[platform]} ${selectedCount === 1 ? "post" : "posts"} scheduled`;
+  }
 
   function handleBulkClick() {
-    // 0 → flip all 7 on, then advance.
-    // 1-6 → just advance (label says "Schedule my pick").
-    // 7 → just advance (everything is already selected).
     if (selectedCount === 0) {
       onSelectAllForPlatform(platform);
+      onAdvance();
+    } else if (isAllSelected) {
+      onDeselectAllForPlatform(platform);
+      // No advance — the destructive-coloured icon signals "click to
+      // undo," and the user landing back at 0/7 here is the entire
+      // point of the action.
+    } else {
+      onAdvance();
     }
-    onAdvance();
   }
 
   return (
@@ -116,8 +141,16 @@ export function WizardStep({
             size="lg"
             className="rounded-full gap-2"
             onClick={handleBulkClick}
+            aria-label={
+              isAllSelected
+                ? `${selectedCount} ${NETWORK_LABELS[platform]} posts scheduled — click to deselect all`
+                : bulkLabel
+            }
           >
-            <CheckSquare className="size-4" aria-hidden />
+            <CheckSquare
+              className={`size-4 ${isAllSelected ? "text-destructive" : ""}`}
+              aria-hidden
+            />
             {bulkLabel}
           </Button>
         </div>
@@ -131,6 +164,7 @@ export function WizardStep({
             platform={platform}
             isSelected={selectedIds.includes(post.id)}
             onToggle={(next) => onSetSelection(post.id, platform, next)}
+            mode={mode}
           />
         ))}
       </ul>
@@ -143,11 +177,13 @@ function PostCard({
   platform,
   isSelected,
   onToggle,
+  mode,
 }: {
   post: PostWithExtras;
   platform: SelectionPlatform;
   isSelected: boolean;
   onToggle: (next: boolean) => void;
+  mode: "reviewing" | "cancelled";
 }) {
   const text = textFor(post, platform);
   const hashtags = hashtagsFor(post, platform);
@@ -194,13 +230,21 @@ function PostCard({
         Schedule this to {NETWORK_LABELS[platform]}?
       </label>
 
-      <div className="flex items-center justify-between border-t border-border pt-4">
+      <div
+        className={`flex items-center ${mode === "cancelled" ? "justify-start" : "justify-between"} border-t border-border pt-4`}
+      >
         <EditDialog post={post} />
-        <RegenerateDialog
-          post={post}
-          disabled={!canRegen}
-          disabledTooltip="You've already regenerated this post."
-        />
+        {/* Regenerate is hidden entirely in cancelled-recoverable mode
+            (no AI text re-rolls during recovery — Item 6 spec). The 1×
+            cap may have already been spent during the reviewing phase,
+            or unused; either way the action isn't available here. */}
+        {mode === "reviewing" ? (
+          <RegenerateDialog
+            post={post}
+            disabled={!canRegen}
+            disabledTooltip="You've already regenerated this post."
+          />
+        ) : null}
       </div>
     </li>
   );

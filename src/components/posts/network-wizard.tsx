@@ -62,7 +62,22 @@ function initialSelections(data: BatchForReview): SelectionsByPlatform {
   return out;
 }
 
-export function NetworkWizard({ data }: { data: BatchForReview }) {
+export function NetworkWizard({
+  data,
+  mode = "reviewing",
+}: {
+  data: BatchForReview;
+  /**
+   * `"reviewing"` is the normal pre-commit wizard flow.
+   *
+   * `"cancelled"` enables the cancelled-recoverable surface (partial Item
+   * 6): same wizard mechanics, but the summary commits via
+   * `rescheduleAction` instead of `scheduleMyPickAction`, copy adapts
+   * ("Re-schedule" / "Re-schedule your week"), and the per-card
+   * Regenerate button is hidden (no AI re-rolls in cancelled mode).
+   */
+  mode?: "reviewing" | "cancelled";
+}) {
   const platforms = PLATFORM_ORDER.filter((p) => data.platforms.includes(p));
   const totalSteps = platforms.length + 1;
 
@@ -131,6 +146,22 @@ export function NetworkWizard({ data }: { data: BatchForReview }) {
     });
   }
 
+  function deselectAllForPlatform(platform: SelectionPlatform) {
+    // Snapshot which posts ARE selected right now (the server actions
+    // will need this list — Set membership doesn't survive into the
+    // transition closure cleanly). Empty after the optimistic clear, so
+    // we have to capture before mutating.
+    const previouslySelected = selections[platform].slice();
+    setSelections((prev) => ({ ...prev, [platform]: [] }));
+    startTransition(async () => {
+      await Promise.all(
+        previouslySelected.map((id) =>
+          deselectForNetworkAction(id, platform)
+        )
+      );
+    });
+  }
+
   function onBack() {
     setStepIndex((i) => Math.max(0, i - 1));
   }
@@ -138,11 +169,13 @@ export function NetworkWizard({ data }: { data: BatchForReview }) {
     setStepIndex((i) => Math.min(totalSteps - 1, i + 1));
   }
 
-  // A step is "completed" once the user has advanced past it. `Array.slice`
-  // gives us the platforms whose step index is strictly less than the
-  // current one. Going Back to a completed step naturally re-hides it
-  // from the banner (because it's no longer behind the cursor).
-  const completedPlatforms = platforms.slice(0, stepIndex);
+  // The banner is driven by ACTUAL selection state, not navigation history.
+  // A platform shows up here if the user has at least one selection for it
+  // — independent of which step they're currently on. Going Back from IG
+  // to FB doesn't change the banner; only un-ticking checkboxes does.
+  const platformsWithSelections = platforms.filter(
+    (p) => selections[p].length > 0
+  );
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
@@ -153,9 +186,9 @@ export function NetworkWizard({ data }: { data: BatchForReview }) {
         totalSteps={totalSteps}
       />
 
-      {completedPlatforms.length > 0 ? (
-        <CompletedBanner
-          completedPlatforms={completedPlatforms}
+      {platformsWithSelections.length > 0 ? (
+        <SelectionsBanner
+          platforms={platformsWithSelections}
           selections={selections}
         />
       ) : null}
@@ -176,7 +209,9 @@ export function NetworkWizard({ data }: { data: BatchForReview }) {
           selections={selections}
           onSetSelection={setSelection}
           onSelectAllForPlatform={selectAllForPlatform}
+          onDeselectAllForPlatform={deselectAllForPlatform}
           onAdvance={onNext}
+          mode={mode}
         />
       ) : (
         <WizardSummary
@@ -185,6 +220,7 @@ export function NetworkWizard({ data }: { data: BatchForReview }) {
           platforms={platforms}
           selections={selections}
           onSetSelection={setSelection}
+          mode={mode}
         />
       )}
 
@@ -267,22 +303,26 @@ function ProgressDots({
 }
 
 /**
- * Persistent confirmation banner shown above the step content on every
- * step the user has advanced past. Reads live counts from the wizard's
- * lifted selection state — so a user who goes Back to FB, unchecks
- * three, and advances again sees "✓ Facebook: 4 posts queued for summary"
- * instead of the original 7.
+ * Live confirmation banner — shows one row per network that has at least
+ * one post selected. Reads counts straight from the wizard's lifted
+ * selection state, so:
+ *   - Tick a checkbox → count goes up immediately.
+ *   - Un-tick → count goes down.
+ *   - Un-tick the last one for a network → that row vanishes.
+ *   - Un-tick the last selection across all networks → banner disappears.
+ *   - Back / Next navigation has zero effect on the banner.
  *
  * Style: soft elevation `bg-card border shadow-soft`, champagne check
- * marks. Doesn't pin to viewport — scrolls with content. Per-user
- * feedback this is preferable to a position:sticky chip that fights with
- * the global SiteHeader / DashboardTopBar.
+ * marks. Doesn't pin to viewport — scrolls with content. We previously
+ * tried `position: sticky` and it fought with the global SiteHeader /
+ * DashboardTopBar; this placement (above the step content, scrolling
+ * normally) is the durable answer.
  */
-function CompletedBanner({
-  completedPlatforms,
+function SelectionsBanner({
+  platforms,
   selections,
 }: {
-  completedPlatforms: SelectionPlatform[];
+  platforms: SelectionPlatform[];
   selections: SelectionsByPlatform;
 }) {
   return (
@@ -291,7 +331,7 @@ function CompletedBanner({
       role="status"
       aria-live="polite"
     >
-      {completedPlatforms.map((platform) => {
+      {platforms.map((platform) => {
         const count = selections[platform].length;
         return (
           <p key={platform} className="text-xs flex items-center gap-2">

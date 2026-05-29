@@ -59,9 +59,15 @@ export default async function PostsPage({
 
   switch (data.batch.status) {
     case "reviewing":
-      return <NetworkWizard data={data} />;
-    case "scheduling":
+      return <NetworkWizard data={data} mode="reviewing" />;
     case "cancelled":
+      // Cancelled-recoverable flow (partial Item 6): the user can keep
+      // editing posts, toggling selections, and re-scheduling within
+      // their trial window. Phase 4's calendar will eventually close
+      // the window after Day 7. Until then, cancelled === editable
+      // wizard, not a dead end.
+      return <NetworkWizard data={data} mode="cancelled" />;
+    case "scheduling":
       return <LockedSummary data={data} />;
     case "scheduled":
     case "completed":

@@ -160,6 +160,26 @@ export async function getCurrentBatch(
 }
 
 /**
+ * Most-recent batch in ANY status (including `cancelled`, `scheduled`,
+ * `completed`). Used by `/create` to find a trial user's only-ever batch
+ * so the gated screen can deep-link back to it. `getCurrentBatch` only
+ * surfaces `reviewing` / `scheduling`, which wasn't enough once cancelled
+ * became a recoverable state.
+ */
+export async function getMostRecentBatch(
+  userId: string
+): Promise<WeeklyBatch | null> {
+  const [batch] = await db
+    .select()
+    .from(weeklyBatches)
+    .where(eq(weeklyBatches.userId, userId))
+    .orderBy(desc(weeklyBatches.createdAt))
+    .limit(1);
+
+  return batch ?? null;
+}
+
+/**
  * Hydrate everything `/posts` needs in one bundle: the batch row, the user's
  * platform selection from onboarding (drives wizard step count), and the 7
  * posts each enriched with their variations + selection rows.
@@ -392,7 +412,13 @@ export async function update(
   if (row.post.userId !== sessionUserId) {
     return { ok: false, error: "not_owned" };
   }
-  if (row.batchStatus !== "reviewing") {
+  // Allowed in `"reviewing"` AND `"cancelled"` — the cancelled-recoverable
+  // flow lets trial users keep editing within their 7-day window. Any
+  // other status (scheduling, scheduled, completed) is hard-locked.
+  if (
+    row.batchStatus !== "reviewing" &&
+    row.batchStatus !== "cancelled"
+  ) {
     return { ok: false, error: "batch_locked" };
   }
 
@@ -574,7 +600,12 @@ async function loadPostForSelectionMutation(
   if (row.userId !== sessionUserId) {
     return { ok: false, error: "not_owned" };
   }
-  if (row.batchStatus !== "reviewing") {
+  // Selection toggles allowed in both `"reviewing"` and `"cancelled"` so
+  // the cancelled-recoverable flow lets users re-pick what to re-schedule.
+  if (
+    row.batchStatus !== "reviewing" &&
+    row.batchStatus !== "cancelled"
+  ) {
     return { ok: false, error: "batch_locked" };
   }
   return { ok: true };
@@ -632,7 +663,7 @@ export async function deselectForNetwork(
 }
 
 // =============================================================================
-// Batch lifecycle: scheduleMyPick, stopBatch
+// Batch lifecycle: scheduleMyPick, reschedule, stopBatch
 // =============================================================================
 
 /**
@@ -701,6 +732,78 @@ export async function scheduleMyPick(
     };
   } catch (err) {
     console.error("[postService.scheduleMyPick]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+/**
+ * Move a cancelled batch back to `"scheduling"` (cancelled-recoverable
+ * flow). Mirror of {@link scheduleMyPick} but operates on a batch that
+ * was previously stopped — same selection-count check, same race-safe
+ * UPDATE pattern. Trial users can use this to recover their one batch
+ * within the 7-day window without burning the trial-cap (the cap is
+ * keyed on whether a batch EXISTS, not on its status).
+ *
+ * Phase 4's calendar will eventually close the recoverable window
+ * (cancelled batches past Day 7 stop accepting `reschedule`). Until
+ * Phase 4 lands, the loop reviewing → scheduling → cancelled →
+ * scheduling → cancelled stays open.
+ */
+export async function reschedule(
+  batchId: string,
+  sessionUserId: string
+): Promise<ScheduleResult> {
+  const [batch] = await db
+    .select({
+      userId: weeklyBatches.userId,
+      status: weeklyBatches.status,
+    })
+    .from(weeklyBatches)
+    .where(eq(weeklyBatches.id, batchId))
+    .limit(1);
+
+  if (!batch) return { ok: false, error: "not_found" };
+  if (batch.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+  if (batch.status !== "cancelled") {
+    return { ok: false, error: "batch_already_locked" };
+  }
+
+  const [countRow] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(postSelections)
+    .innerJoin(posts, eq(posts.id, postSelections.postId))
+    .where(eq(posts.batchId, batchId));
+
+  const selectionCount = countRow?.count ?? 0;
+  if (selectionCount === 0) {
+    return { ok: false, error: "no_selections" };
+  }
+
+  try {
+    const updateResult = await db
+      .update(weeklyBatches)
+      .set({ status: "scheduling" })
+      .where(
+        and(
+          eq(weeklyBatches.id, batchId),
+          eq(weeklyBatches.status, "cancelled")
+        )
+      )
+      .returning({ id: weeklyBatches.id });
+
+    if (updateResult.length === 0) {
+      return { ok: false, error: "batch_already_locked" };
+    }
+
+    return {
+      ok: true,
+      batchId,
+      committedSelections: selectionCount,
+    };
+  } catch (err) {
+    console.error("[postService.reschedule]", err);
     return { ok: false, error: "db_failed" };
   }
 }
