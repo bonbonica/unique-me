@@ -35,7 +35,14 @@ export function SiteHeader() {
               >
                 <Bot className="size-5" />
               </div>
-              <span className="font-fraunces font-medium tracking-tight bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent">
+              {/*
+                Brand wordmark uses the .gilt utility (defined in globals.css)
+                so it shares the gold gradient with page headings AND picks up
+                the per-theme `--gilt-end` token. On cream the gradient walks
+                brass → warm-near-black; on midnight it stays brass → blush
+                gold. Legible in both modes.
+              */}
+              <span className="font-fraunces font-medium tracking-tight gilt">
                 UniqueMe
               </span>
             </Link>

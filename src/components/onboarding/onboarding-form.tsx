@@ -9,7 +9,7 @@ import {
   useTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Loader2, Sparkles } from "lucide-react";
+import { AlertCircle, Check, Loader2, Sparkles } from "lucide-react";
 import {
   analyzeWebsiteAction,
   saveOnboardingAction,
@@ -141,14 +141,6 @@ export function OnboardingForm() {
   const [analyzedUrl, setAnalyzedUrl] = useState<string>("");
   const [suggestedDescription, setSuggestedDescription] = useState<string>("");
 
-  // Tracks whether the textarea content was placed by us (vs typed by the
-  // user). This is the cleanest way to differentiate "we already auto-
-  // filled" from "the user happened to type the suggested text" — and it
-  // also lets us flip the affordance off the moment the user starts
-  // editing what we suggested.
-  const [autoFilledFromAnalysis, setAutoFilledFromAnalysis] =
-    useState<boolean>(false);
-
   // useTransition wraps the on-blur server action so the form stays
   // interactive while the scrape/analysis runs (5-10s).
   const [, startAnalysisTransition] = useTransition();
@@ -179,7 +171,6 @@ export function OnboardingForm() {
     setAnalysis(null);
     setAnalyzedUrl("");
     setSuggestedDescription("");
-    setAutoFilledFromAnalysis(false);
   }
 
   // Toggling "I don't have a website yet" clears the URL value AND disables
@@ -202,10 +193,16 @@ export function OnboardingForm() {
    * checked, same URL as the last successful analysis) so the user can
    * tab through the field without triggering duplicate work.
    *
-   * On success we always populate the cache (so submit can skip the
-   * scrape). We only auto-fill the textarea when it's empty — never
-   * overwrite user-typed content. The "Use this draft" affordance below
-   * handles the populated-textarea case.
+   * On success we populate the cache (so submit can skip the scrape) and
+   * surface the "Use this draft" affordance above the description
+   * textarea. We do NOT silently auto-fill the textarea — every field
+   * action stays explicit, so the user always knows what's about to land
+   * in their profile.
+   *
+   * On failure we set status to "error" — the status line below the URL
+   * input renders an actionable destructive-colour message ("Couldn't
+   * read that website — check the URL and try again") instead of a
+   * silent no-op, which was the bug pre-polish.
    */
   function analyzeUrl(rawUrl: string) {
     const trimmed = rawUrl.trim();
@@ -227,28 +224,10 @@ export function OnboardingForm() {
         setSuggestedDescription(result.suggestedDescription);
         setAnalyzedUrl(result.normalizedUrl);
         setAnalysisStatus("ready");
-
-        // Auto-fill only when the textarea is empty. We snapshot the
-        // current value inside the transition callback (via the functional
-        // updater pattern) to avoid racing against any keystroke that
-        // landed during the analysis window.
-        setValues((prev) => {
-          if (prev.businessDescription.trim().length === 0) {
-            setAutoFilledFromAnalysis(true);
-            return {
-              ...prev,
-              businessDescription: result.suggestedDescription,
-            };
-          }
-          // Textarea has content — leave it alone, the "Use this draft"
-          // card will appear instead.
-          return prev;
-        });
       } else {
-        // Soft failure — surface a subdued hint, never a banner. The user
-        // can still fill the description manually. We deliberately don't
-        // distinguish reasons in the UI copy; the four reasons all reduce
-        // to the same user action ("write your own description").
+        // The status line under the URL input renders the destructive
+        // error variant. We don't try to distinguish reasons in the copy
+        // — all four reduce to the same user action ("check the URL").
         setSuggestedDescription("");
         setAnalysis(null);
         setAnalysisStatus("error");
@@ -271,12 +250,22 @@ export function OnboardingForm() {
     });
   }
 
-  // The submit button stays disabled until the user picks at least one
-  // platform. The server also enforces this — duplicating it here is a UX
-  // affordance, not a security control. Note: we deliberately do NOT
-  // disable submit while an analysis is in flight — the server falls back
-  // to a live scrape in that case, matching the pre-feature behaviour.
-  const canSubmit = values.platforms.length > 0 && !pending;
+  // The submit button stays disabled until every required field has a
+  // valid-shape value. The server schema enforces these too; duplicating
+  // them here is a UX affordance so the user can see at a glance whether
+  // they're done. We deliberately do NOT disable submit while an analysis
+  // is in flight — the server falls back to a live scrape in that case,
+  // matching the pre-feature behaviour.
+  const hasWebsiteAnswer =
+    values.noWebsite || values.websiteUrl.trim().length > 0;
+  const canSubmit =
+    values.businessName.trim().length > 0 &&
+    hasWebsiteAnswer &&
+    values.businessType.length > 0 &&
+    values.businessDescription.trim().length > 0 &&
+    values.tone !== "" &&
+    values.platforms.length > 0 &&
+    !pending;
 
   // On successful submit the action returns a redirect target. `replace`
   // (not `push`) so the back button doesn't return to the now-stale form.
@@ -293,7 +282,7 @@ export function OnboardingForm() {
   // slow step is running. Scrape + analyze can take 5-10s when the cache
   // is empty, so we differentiate.
   const submitLabel = useMemo(() => {
-    if (!pending) return "Save and continue";
+    if (!pending) return "Finish onboarding";
     // If we already have a cached analysis for the current URL, the
     // server will skip the scrape and the submit is fast.
     const willScrapeOnSubmit =
@@ -309,13 +298,15 @@ export function OnboardingForm() {
   // Derived UI flags for the description field. Kept inline at the call
   // site below would clutter the JSX; pulling them up here keeps the
   // render readable.
+  // The "Use this draft" affordance always shows when a fresh suggestion
+  // is ready AND the textarea content doesn't already match it. We never
+  // auto-fill silently — the user has to click the affordance to apply.
+  // Once they click, the trim-comparison hides the card; if they edit
+  // away from the suggestion, the card re-appears.
   const showDraftCard =
     analysisStatus === "ready" &&
-    !autoFilledFromAnalysis &&
-    values.businessDescription.trim().length > 0 &&
-    suggestedDescription.length > 0;
-  const showAutoFilledHint =
-    analysisStatus === "ready" && autoFilledFromAnalysis;
+    suggestedDescription.length > 0 &&
+    values.businessDescription.trim() !== suggestedDescription.trim();
   const showDraftingHint = analysisStatus === "pending";
 
   return (
@@ -441,10 +432,16 @@ export function OnboardingForm() {
                 </span>
               </>
             ) : analysisStatus === "error" ? (
-              <span>
-                We couldn&apos;t read that site — no problem, you can fill the
-                description yourself.
-              </span>
+              <>
+                <AlertCircle
+                  className="size-3.5 text-destructive shrink-0"
+                  aria-hidden="true"
+                />
+                <span className="text-destructive">
+                  Couldn&apos;t read that website — check the URL and try
+                  again.
+                </span>
+              </>
             ) : (
               <span>
                 We&apos;ll read your site to learn your voice and offerings.
@@ -605,10 +602,7 @@ export function OnboardingForm() {
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => {
-                update("businessDescription", suggestedDescription);
-                setAutoFilledFromAnalysis(true);
-              }}
+              onClick={() => update("businessDescription", suggestedDescription)}
               className="rounded-full shrink-0"
             >
               Use this draft
@@ -637,15 +631,7 @@ export function OnboardingForm() {
           name="business_description"
           required
           value={values.businessDescription}
-          onChange={(e) => {
-            update("businessDescription", e.target.value);
-            // The instant the user edits the field, it's no longer "auto-
-            // filled by us" — flip the flag so the small under-textarea
-            // hint disappears and they own the content.
-            if (autoFilledFromAnalysis) {
-              setAutoFilledFromAnalysis(false);
-            }
-          }}
+          onChange={(e) => update("businessDescription", e.target.value)}
           className="min-h-32 bg-muted"
           placeholder="A neighbourhood wine and small-plates bar in Brooklyn, focused on natural wines and seasonal sharing menus."
           aria-invalid={
@@ -663,14 +649,6 @@ export function OnboardingForm() {
             className="mt-1.5 text-xs text-destructive"
           >
             {fieldErrors.business_description}
-          </p>
-        ) : showAutoFilledHint ? (
-          <p
-            id={`${idDescription}-hint`}
-            className="mt-1.5 text-xs text-primary flex items-center gap-1.5"
-          >
-            <Sparkles className="size-3.5" aria-hidden="true" />
-            <span>Drafted from your website. Edit freely.</span>
           </p>
         ) : (
           <p

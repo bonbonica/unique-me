@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { Loader2 } from "lucide-react";
 import {
   type GenerateActionState,
   INITIAL_GENERATE_STATE,
@@ -13,10 +14,15 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 
 /**
- * Two-field generate form for `/create` (Phase 2 task-07). Posts directly
- * to {@link generateWeeklyAction} via React 19's `useActionState`. On
- * success the action server-side-redirects to `/posts?batchId=...`, so the
- * form never sees an `ok: true` state — only error states surface here.
+ * Two-field generate form for `/create` (Phase 2 task-07 + polish wave).
+ * Posts directly to {@link generateWeeklyAction} via React 19's
+ * `useActionState`. On success the action server-side-redirects to
+ * `/posts?batchId=...`, so the form never sees an `ok: true` state — only
+ * error states surface here.
+ *
+ * Placeholders are passed in from the server (computed from the user's
+ * profile — see `/create/page.tsx`) so they feel personal to the user's
+ * actual business rather than generic florist/nutritionist examples.
  *
  * While the action is in flight (`pending`), the entire form is replaced
  * by {@link GeneratingState}. This solves two problems at once:
@@ -27,7 +33,13 @@ import { Textarea } from "@/components/ui/textarea";
  * On error the form re-renders with the typed values preserved and an
  * inline banner showing the action's error copy.
  */
-export function GenerateForm() {
+export function GenerateForm({
+  themePlaceholder,
+  importantThingPlaceholder,
+}: {
+  themePlaceholder: string;
+  importantThingPlaceholder: string;
+}) {
   const [state, formAction, pending] = useActionState<
     GenerateActionState,
     FormData
@@ -48,7 +60,7 @@ export function GenerateForm() {
           name="theme"
           type="text"
           required
-          placeholder="e.g. protein basics, autumn florals, holiday gift cards"
+          placeholder={themePlaceholder}
           className="h-11 bg-muted"
           aria-invalid={Boolean(state.error) || undefined}
         />
@@ -63,7 +75,7 @@ export function GenerateForm() {
           name="importantThing"
           required
           rows={4}
-          placeholder="e.g. how to balance protein across meals; the new winter bouquet line; our gift voucher deadline"
+          placeholder={importantThingPlaceholder}
           className="min-h-24 bg-muted"
           aria-invalid={Boolean(state.error) || undefined}
         />
@@ -83,7 +95,14 @@ export function GenerateForm() {
         size="lg"
         className="w-full sm:w-auto rounded-full glow-champagne"
       >
-        Generate this week
+        {pending ? (
+          <>
+            <Loader2 className="animate-spin size-4 mr-2" aria-hidden />
+            Generating…
+          </>
+        ) : (
+          "Generate this week"
+        )}
       </Button>
     </form>
   );

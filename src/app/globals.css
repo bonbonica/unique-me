@@ -87,6 +87,14 @@
     a deeper brass tone so it remains visible against cream surfaces.
   */
   --shadow-glow-color: 0.6 0.1 70;
+
+  /*
+    `.gilt` gradient end-color. On cream the default `--accent` (blush gold,
+    L=0.86) fades into the L=0.95 background and becomes invisible at the
+    end of a word — so light mode walks the gradient down to the warm
+    near-black foreground instead, keeping every letter legible.
+  */
+  --gilt-end: var(--foreground);
 }
 
 .dark {
@@ -114,7 +122,14 @@
   --accent-foreground: oklch(0.16 0.025 265);
 
   --muted: oklch(0.24 0.028 265);
-  --muted-foreground: oklch(0.55 0.025 265);
+  /*
+    Bumped from oklch(0.55 0.025 265) (~4.6:1 contrast — AA borderline,
+    fatigued the eye on long captions / wizard helper text) up to
+    oklch(0.82 0.02 265) (~9:1, comfortably AAA for body text). Still
+    differentiated from the ivory foreground (0.95) so secondary text
+    keeps its visual hierarchy below primary content.
+  */
+  --muted-foreground: oklch(0.82 0.02 265);
 
   --border: oklch(0.28 0.025 265);
   --input: oklch(0.32 0.03 265);
@@ -130,6 +145,14 @@
 
   /* Champagne glow color used by .glow-champagne. */
   --shadow-glow-color: 0.79 0.07 75;
+
+  /*
+    On midnight the original blush-gold end keeps the gradient feeling
+    gilt and luxurious — `--accent` is bright enough against the dark
+    background. Light mode walks the gradient to foreground instead
+    (see :root).
+  */
+  --gilt-end: var(--accent);
 }
 
 @keyframes fade-in {
@@ -205,7 +228,7 @@
     background-image: linear-gradient(
       135deg,
       var(--primary),
-      var(--accent)
+      var(--gilt-end)
     );
     background-clip: text;
     -webkit-background-clip: text;

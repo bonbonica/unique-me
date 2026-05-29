@@ -8,6 +8,8 @@ export const BUSINESS_TYPES = [
   "Fitness",
   "Education",
   "Tech",
+  "Health",
+  "Coaching",
   "Other",
 ] as const;
 
