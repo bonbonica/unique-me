@@ -1,4 +1,7 @@
 import { headers } from "next/headers";
+import { GenerateForm } from "@/components/create/generate-form";
+import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
+import { TrialNote } from "@/components/create/trial-note";
 import { auth } from "@/lib/auth";
 import { type Profile } from "@/lib/schema";
 import {
@@ -6,9 +9,6 @@ import {
   profileService,
   subscriptionService,
 } from "@/lib/services";
-import { GenerateForm } from "@/components/create/generate-form";
-import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
-import { TrialNote } from "@/components/create/trial-note";
 
 /**
  * `/create` page (Phase 2 task-07). Two render paths driven by subscription

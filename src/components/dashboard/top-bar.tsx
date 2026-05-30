@@ -1,5 +1,5 @@
-import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
 import { TrialStrip } from "@/components/dashboard/trial-strip";
+import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
 
 /**
  * Human-readable label per plan value. Kept in one map so future plan

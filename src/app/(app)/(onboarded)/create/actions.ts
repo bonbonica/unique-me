@@ -1,7 +1,7 @@
 "use server";
 
-import { redirect } from "next/navigation";
 import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { postService } from "@/lib/services";
 import type { GenerateActionState } from "./action-types";

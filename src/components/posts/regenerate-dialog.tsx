@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, RefreshCw } from "lucide-react";
 import { regeneratePostAction } from "@/app/(app)/(onboarded)/posts/actions";
-import type { Post } from "@/lib/schema";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -17,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { Post } from "@/lib/schema";
 
 /**
  * Per-post Regenerate dialog (Phase 2 task-12). Submits the user's

@@ -3,8 +3,8 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { postService } from "@/lib/services";
 import type { SelectionPlatform } from "@/lib/schema";
+import { postService } from "@/lib/services";
 
 /**
  * Server actions backing `/posts` interactions (Phase 2 task-08). Each

@@ -1,7 +1,7 @@
 # Task 14: Security Pass + Lint/Typecheck/Build Audit
 
 ## Status
-not started
+done
 
 ## Wave
 6

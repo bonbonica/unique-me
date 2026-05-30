@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { postService } from "@/lib/services";
 import { LockedSummary } from "@/components/posts/locked-summary";
 import { NetworkWizard } from "@/components/posts/network-wizard";
+import { auth } from "@/lib/auth";
+import { postService } from "@/lib/services";
 
 /**
  * `/posts` review page (Phase 2 task-08). Server component that loads the

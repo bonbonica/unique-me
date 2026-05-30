@@ -1,10 +1,8 @@
 import "server-only";
 
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { db } from "@/lib/db";
 import * as postGenerator from "@/lib/ai/post-generator";
-import * as profileService from "./profile-service";
-import * as subscriptionService from "./subscription-service";
+import { db } from "@/lib/db";
 import {
   type NewPostVariation,
   type Post,
@@ -16,6 +14,8 @@ import {
   posts,
   weeklyBatches,
 } from "@/lib/schema";
+import * as profileService from "./profile-service";
+import * as subscriptionService from "./subscription-service";
 
 /**
  * Phase 2 postService. Owns the full weekly-batch lifecycle from generation

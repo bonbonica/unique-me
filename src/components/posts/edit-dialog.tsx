@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Edit3, Loader2 } from "lucide-react";
 import { updatePostAction } from "@/app/(app)/(onboarded)/posts/actions";
-import type { Post } from "@/lib/schema";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { Post } from "@/lib/schema";
 
 /**
  * Per-post Edit dialog (Phase 2 task-12). Lets the user replace the
