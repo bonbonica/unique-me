@@ -1,5 +1,5 @@
+import Image from "next/image";
 import Link from "next/link";
-import { Bot } from "lucide-react";
 import { UserProfile } from "@/components/auth/user-profile";
 import { ThemeToggle } from "@/components/theme-toggle";
 
@@ -19,9 +19,17 @@ export function SiteHeader() {
           aria-label="Main navigation"
         >
           {/*
-            Wordmark per DESIGN.md § 14. The Fraunces medium weight carries the
-            visual heft, so the outer heading drops font-bold; the gilt
-            gradient and tracking-tight come straight from the spec.
+            Wordmark per DESIGN.md § 14. Two parts:
+              1. The icon inside the gradient circle — the user-supplied
+                 vector at public/uniqueme-logo.svg. Same file the user
+                 uploaded, just with the viewBox tightened to crop out the
+                 portrait-canvas whitespace (artwork was sitting in roughly
+                 the upper-middle of a 1024x1536 canvas).
+              2. The gilt-text "UniqueMe" wordmark in Fraunces, using the
+                 .gilt utility for the per-theme gold gradient.
+            The SVG carries its own hardcoded gold gradients, so it does
+            NOT inherit text-primary — the icon stays the designed gold
+            in both light and dark modes by design.
           */}
           <h1 className="text-xl sm:text-2xl">
             <Link
@@ -33,15 +41,15 @@ export function SiteHeader() {
                 className="w-9 h-9 rounded-xl bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/30 flex items-center justify-center"
                 aria-hidden="true"
               >
-                <Bot className="size-5" />
+                <Image
+                  src="/uniqueme-logo.svg"
+                  alt=""
+                  width={540}
+                  height={540}
+                  className="size-7 translate-x-0.5"
+                  priority
+                />
               </div>
-              {/*
-                Brand wordmark uses the .gilt utility (defined in globals.css)
-                so it shares the gold gradient with page headings AND picks up
-                the per-theme `--gilt-end` token. On cream the gradient walks
-                brass → warm-near-black; on midnight it stays brass → blush
-                gold. Legible in both modes.
-              */}
               <span className="font-fraunces font-medium tracking-tight gilt">
                 UniqueMe
               </span>

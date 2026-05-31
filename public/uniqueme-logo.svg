@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="540" height="540" viewBox="297 439 540 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Gold letter U logo with sparkle">
+  <defs>
+    <linearGradient id="goldMain" x1="260" y1="520" x2="750" y2="930" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F2A300"/>
+      <stop offset="0.22" stop-color="#FFD64A"/>
+      <stop offset="0.48" stop-color="#F6A800"/>
+      <stop offset="0.78" stop-color="#D98600"/>
+      <stop offset="1" stop-color="#FFCA32"/>
+    </linearGradient>
+
+    <radialGradient id="shineLeft" cx="38%" cy="38%" r="48%">
+      <stop offset="0" stop-color="#FFF9A8" stop-opacity="0.95"/>
+      <stop offset="0.28" stop-color="#FFE95C" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#FFD24A" stop-opacity="0"/>
+    </radialGradient>
+
+    <linearGradient id="edgeGold" x1="220" y1="490" x2="780" y2="990" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF36B"/>
+      <stop offset="0.22" stop-color="#F3A100"/>
+      <stop offset="0.55" stop-color="#7B3D00"/>
+      <stop offset="0.82" stop-color="#FFCE35"/>
+      <stop offset="1" stop-color="#9B5500"/>
+    </linearGradient>
+
+    <linearGradient id="innerShadow" x1="410" y1="580" x2="585" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#874000" stop-opacity="0.92"/>
+      <stop offset="0.55" stop-color="#B45A00" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#FFB320" stop-opacity="0.08"/>
+    </linearGradient>
+
+    <radialGradient id="starGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.24" stop-color="#FFFDEE"/>
+      <stop offset="0.48" stop-color="#FFEA57"/>
+      <stop offset="0.74" stop-color="#F5A500"/>
+      <stop offset="1" stop-color="#A35B00"/>
+    </radialGradient>
+
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="8" flood-color="#4A2600" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1536" fill="none"/>
+
+  <!-- Gold U outer body -->
+  <path filter="url(#softShadow)"
+        d="M332 552
+           C332 528 350 516 374 516
+           L409 516
+           C438 516 450 532 450 558
+           L450 704
+           C450 763 475 795 515 795
+           C555 795 580 763 580 704
+           L580 612
+           C580 586 594 570 620 562
+           L655 552
+           C682 545 699 558 701 589
+           L701 710
+           C701 845 624 931 514 931
+           C403 931 332 850 332 720
+           Z"
+        fill="url(#goldMain)"
+        stroke="url(#edgeGold)"
+        stroke-width="14"
+        stroke-linejoin="round"/>
+
+  <!-- Inner carved dark curve -->
+  <path d="M450 690
+           C450 764 475 795 515 795
+           C555 795 580 764 580 690
+           L580 720
+           C580 804 632 854 682 842
+           C642 899 584 924 514 924
+           C433 924 378 873 356 795
+           C401 845 458 874 522 868
+           C473 856 450 808 450 690Z"
+        fill="url(#innerShadow)"
+        opacity="0.72"/>
+
+  <!-- Main shine overlay -->
+  <path d="M352 548
+           C352 536 363 531 377 531
+           L405 531
+           C425 531 433 542 433 560
+           L433 705
+           C433 796 483 834 532 822
+           C502 850 437 834 403 784
+           C368 733 352 653 352 548Z"
+        fill="url(#shineLeft)" opacity="0.95"/>
+
+  <!-- Thin bright highlight lines -->
+  <path d="M354 556 C354 538 366 531 385 531 L406 531"
+        fill="none" stroke="#FFF37A" stroke-width="5" stroke-linecap="round" opacity="0.95"/>
+  <path d="M606 585 C637 568 668 568 680 592 C696 626 697 709 686 758"
+        fill="none" stroke="#FFF37A" stroke-width="5" stroke-linecap="round" opacity="0.9"/>
+  <path d="M356 797 C385 885 447 920 514 919 C589 918 652 872 681 802"
+        fill="none" stroke="#FFE367" stroke-width="4" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- Sparkle -->
+  <path d="M684 488
+           C697 566 724 593 802 606
+           C724 619 697 646 684 724
+           C671 646 644 619 566 606
+           C644 593 671 566 684 488Z"
+        fill="url(#starGlow)"
+        stroke="#E39B00"
+        stroke-width="5"
+        stroke-linejoin="round"/>
+
+  <path d="M684 540
+           C692 584 706 598 750 606
+           C706 614 692 628 684 672
+           C676 628 662 614 618 606
+           C662 598 676 584 684 540Z"
+        fill="#FFFFFF" opacity="0.85"/>
+
+</svg>
