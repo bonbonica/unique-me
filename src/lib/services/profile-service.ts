@@ -15,6 +15,7 @@ import {
   type WebsiteAnalysis,
 } from "@/lib/schema";
 import { scrapeWebsite } from "@/lib/scraping/firecrawl";
+import { getSubscription } from "./subscription-service";
 
 export { BUSINESS_TYPES, type BusinessType };
 
@@ -113,6 +114,23 @@ export async function saveProfile(
 
   const data = parsed.data;
 
+  /**
+   * Starter platform-cap enforcement (Phase 3 D6). The onboarding form
+   * (task-14) caps the picker at 2 visually, but that's convenience UX —
+   * service-layer enforcement is the correctness gate. A Pro→Starter
+   * downgrade does NOT auto-trim `profiles.platforms`, so any subsequent
+   * save by a downgraded user could persist 3 platforms unless we refuse
+   * here. The error code is local to profileService's union; the
+   * complementary `canGenerate` overage check covers the read path.
+   */
+  const subscription = await getSubscription(userId);
+  if (
+    subscription?.plan === "starter" &&
+    data.platforms.length > 2
+  ) {
+    throw new Error("PLATFORMS_OVERAGE_FOR_PLAN");
+  }
+
   // Normalize platforms to the schema's branded `Platform[]` type. Zod's
   // enum already constrains values; this is just to satisfy Drizzle's
   // inferred column type.
@@ -168,6 +186,21 @@ export async function updateProfile(
   }
 
   const data = parsed.data;
+
+  /**
+   * Starter platform-cap enforcement (Phase 3 D6). Same rationale as
+   * {@link saveProfile}: the UI cap is convenience, the service cap is
+   * correctness — a Pro→Starter downgrade leaves stale platform arrays in
+   * place, so any partial update that touches `platforms` must refuse
+   * 3 entries when the user's current plan is Starter. Skipped when the
+   * caller didn't supply `platforms` at all.
+   */
+  if (data.platforms !== undefined && data.platforms.length > 2) {
+    const subscription = await getSubscription(userId);
+    if (subscription?.plan === "starter") {
+      throw new Error("PLATFORMS_OVERAGE_FOR_PLAN");
+    }
+  }
 
   // Build the update set with only the fields the caller actually supplied,
   // so an undefined value doesn't accidentally null out a column.

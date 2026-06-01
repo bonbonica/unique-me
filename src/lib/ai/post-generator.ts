@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { anthropic, CLAUDE_MODEL, cachedSystemPrompt } from "@/lib/ai/anthropic";
-import type { Profile } from "@/lib/schema";
+import type { PostLength, Profile } from "@/lib/schema";
 import type Anthropic from "@anthropic-ai/sdk";
 
 /**
@@ -37,6 +37,33 @@ const REGEN_TOOL_NAME = "regenerate_one_post";
 // =============================================================================
 
 /**
+ * Per-`PostLength` directive paragraph. Selected at prompt-build time based on
+ * the value the caller resolved (NULL / undefined → "medium" — see callers).
+ *
+ * The word counts are advisory only; the wizard tolerates arbitrary-length
+ * captions (Phase 2 R12 word wrap) and the Zod validator below still caps the
+ * absolute maximums. We're shaping the *target* shape of generation, not
+ * enforcing it post-hoc.
+ *
+ * Lives as a standalone LENGTH section appended after VOICE GUARDRAILS so it
+ * sits with composition guidance — close enough to influence sentence rhythm,
+ * far enough from HASHTAG / VARIATION rules that it doesn't get crossed with
+ * platform-specific instructions.
+ */
+const LENGTH_DIRECTIVES: Record<PostLength, string> = {
+  short:
+    "Keep each caption to 1–2 sentences. Built to scroll-stop on mobile. " +
+    "Aim for ~25 words max — every word earns its place.",
+  medium:
+    "2–4 sentences. Conversational — a hook, one supporting line, and a CTA. " +
+    "Aim for ~40–70 words. This is the default cadence.",
+  long:
+    "5–8 sentences. Storytelling format — open with a hook, build context, " +
+    "and land on a CTA. Aim for ~100–160 words. Use this length to earn " +
+    "emotional weight, not to pad.",
+};
+
+/**
  * Build the system prompt for both `generate` and `regenerateOne`. The brand
  * context is identical in both cases; only the user message differs. Plain
  * string concatenation — no template engine.
@@ -44,8 +71,12 @@ const REGEN_TOOL_NAME = "regenerate_one_post";
  * When `profile.websiteAnalysis` is null (user has no website, or scrape
  * failed during onboarding) we skip the entire brand-summary block so the
  * model doesn't see empty `{{}}` placeholders.
+ *
+ * `postLength` shapes a single appended LENGTH directive paragraph; the rest
+ * of the prompt is unchanged regardless of length so platform / tone / hashtag
+ * rules stay stable across batches.
  */
-function buildSystemPrompt(profile: Profile): string {
+function buildSystemPrompt(profile: Profile, postLength: PostLength): string {
   const base =
     "You are a social media content expert. You create engaging, authentic posts " +
     "that reflect the business owner's unique voice and personality. Each post " +
@@ -95,8 +126,9 @@ function buildSystemPrompt(profile: Profile): string {
     "    Shorter is fine. More hashtags are conventional (up to 30). Image-led tone.\n" +
     "    End with an IG-appropriate CTA.\n" +
     "  - A LinkedIn variation: same idea but adapted for LinkedIn.\n" +
-    "    Longer-form welcome (up to 3000 chars). Professional framing. Fewer hashtags\n" +
-    "    (3-6). Lead with insight, not promotion.\n\n" +
+    "    Longer-form welcome (~3000 chars as a rough upper bound — prefer concise\n" +
+    "    but accept longer for storytelling formats). Professional framing.\n" +
+    "    Fewer hashtags (3-6). Lead with insight, not promotion.\n\n" +
     "The variations are NOT translations or trivial rewrites — they should feel native\n" +
     "to the platform while preserving the canonical post's core idea and the brand voice.\n\n" +
     "ANGLE VARIETY:\n" +
@@ -109,6 +141,13 @@ function buildSystemPrompt(profile: Profile): string {
     "- Avoid generic AI phrases: \"in today's fast-paced world\", \"leverage\", \"unlock the power of\", etc.\n" +
     "- Avoid corporate-speak unless the brand is explicitly corporate.\n" +
     "- Write the way a small-business owner with a strong personal voice would write.\n\n" +
+    "LENGTH:\n" +
+    LENGTH_DIRECTIVES[postLength] +
+    "\n" +
+    "Apply this length target to the canonical Facebook caption. Instagram and\n" +
+    "LinkedIn variations should still respect their own platform conventions\n" +
+    "above, but tilt in the same direction (short → tighter variations; long →\n" +
+    "more room to breathe).\n\n" +
     "HASHTAG RULES:\n" +
     "- Canonical (Facebook): 3-8 hashtags.\n" +
     "- Instagram variation: 8-30 hashtags, mix of broad reach + niche.\n" +
@@ -308,9 +347,15 @@ export async function generate(args: {
   profile: Profile;
   theme: string;
   importantThing: string;
+  // Per spec D7: per-batch, Pro-only UI choice; Starter / Trial default to
+  // "medium". The generator itself is plan-agnostic — callers resolve the
+  // value. NULL / undefined ≡ "medium" for back-compat with Phase 2 batches
+  // generated before this column existed.
+  postLength?: PostLength;
 }): Promise<Generated | null> {
   try {
-    const systemText = buildSystemPrompt(args.profile);
+    const resolvedLength: PostLength = args.postLength ?? "medium";
+    const systemText = buildSystemPrompt(args.profile, resolvedLength);
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
@@ -391,9 +436,14 @@ export async function regenerateOne(args: {
   currentHashtags: string[];
   feedback: string;
   postOrder: number;
+  // Same semantics as `generate`: undefined ≡ "medium". Callers (postService
+  // .regenerate) should pass the parent batch's stored postLength so the
+  // rewrite stays consistent with the surrounding 6 posts.
+  postLength?: PostLength;
 }): Promise<RegeneratedOne | null> {
   try {
-    const systemText = buildSystemPrompt(args.profile);
+    const resolvedLength: PostLength = args.postLength ?? "medium";
+    const systemText = buildSystemPrompt(args.profile, resolvedLength);
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,

@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import {
   type NewPostVariation,
   type Post,
+  type PostLength,
   type PostVariation,
   type SelectionPlatform,
   type WeeklyBatch,
@@ -54,7 +55,17 @@ export type GenerateWeeklyResult =
     }
   | {
       ok: false;
-      error: "no_profile" | "trial_batch_exists" | "ai_failed" | "db_failed";
+      // Phase 3 spec § 7.2: the `canGenerate` reasons are forwarded verbatim
+      // into this error union rather than being mapped to a new variant. When
+      // `canGenerate` adds a reason, this union adds the same string.
+      error:
+        | "no_profile"
+        | "trial_batch_exists"
+        | "weekly_cap_active"
+        | "starter_platforms_overage"
+        | "plan_inactive"
+        | "ai_failed"
+        | "db_failed";
       details?: string;
     };
 
@@ -286,12 +297,17 @@ export async function getBatchForReview(
  *      - 7 rows in `posts` (status `"draft"`).
  *      - 0–14 rows in `post_variations` (0 or 2 per post, per Pro / Starter).
  *
+ * `input.postLength` is required (Phase 3 spec § 5.5, D7): the form layer
+ * decides Pro-only visibility and submits `"medium"` for non-Pro callers.
+ * The value is persisted on `weekly_batches.post_length` and forwarded to
+ * the generator so the prompt's LENGTH directive is correct on first pass.
+ *
  * Either the whole transaction commits or the whole thing rolls back — we
  * never persist a partial batch.
  */
 export async function generateWeekly(
   userId: string,
-  input: { theme: string; importantThing: string }
+  input: { theme: string; importantThing: string; postLength: PostLength }
 ): Promise<GenerateWeeklyResult> {
   const profile = await profileService.getProfile(userId);
   if (!profile) return { ok: false, error: "no_profile" };
@@ -308,6 +324,7 @@ export async function generateWeekly(
     profile,
     theme: input.theme,
     importantThing: input.importantThing,
+    postLength: input.postLength,
   });
   if (!generated) return { ok: false, error: "ai_failed" };
 
@@ -319,6 +336,7 @@ export async function generateWeekly(
         userId,
         theme: input.theme,
         importantThing: input.importantThing,
+        postLength: input.postLength,
         totalPosts: 7,
         acceptedPosts: 0,
         skippedPosts: 0,
