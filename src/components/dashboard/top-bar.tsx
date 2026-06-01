@@ -1,15 +1,6 @@
 import { TrialStrip } from "@/components/dashboard/trial-strip";
+import { PLAN_LABELS } from "@/lib/pricing";
 import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
-
-/**
- * Human-readable label per plan value. Kept in one map so future plan
- * additions only require touching one spot.
- */
-const PLAN_LABELS: Record<SubscriptionStateSnapshot["plan"], string> = {
-  free_trial: "Free trial",
-  starter: "Starter",
-  pro: "Pro",
-};
 
 /**
  * Topbar that sits below the global SiteHeader and to the right of the

@@ -169,6 +169,9 @@ export const weeklyBatches = pgTable(
     skippedPosts: integer("skipped_posts").default(0).notNull(),
     // Union: "in_progress" | "reviewing" | "scheduling" | "scheduled" | "completed".
     status: text("status").notNull(),
+    // Union: "short" | "medium" | "long" (PostLength). NULL = legacy Phase 2
+    // batch; render/prompt sites must treat NULL as "medium" for back-compat.
+    postLength: text("post_length"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [index("weekly_batches_user_id_idx").on(table.userId)]
@@ -342,6 +345,8 @@ export const subscriptions = pgTable(
     regenerationsDuringTrial: integer("regenerations_during_trial")
       .default(0)
       .notNull(),
+    // Not updatedAt: that bumps on unrelated writes (postsUsedThisMonth, etc.), so plan-change detection (D5) needs its own column.
+    planChangedAt: timestamp("plan_changed_at").notNull().defaultNow(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -510,6 +515,7 @@ export type BatchStatus =
 export type PostStatus = "draft" | "accepted" | "edited" | "skipped";
 export type ImageSource = "ai" | "uploaded" | "library";
 export type SubscriptionPlan = "free_trial" | "starter" | "pro";
+export type PostLength = "short" | "medium" | "long";
 export type SubscriptionStatus = "trial" | "active" | "cancelled" | "expired";
 export type BillingCycle = "monthly" | "yearly";
 export type ConnectedAccountStatus = "active" | "expired" | "disconnected";
