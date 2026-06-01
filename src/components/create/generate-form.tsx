@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { Loader2 } from "lucide-react";
 import {
   type GenerateActionState,
@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { PostLength, SubscriptionPlan } from "@/lib/schema";
+import { cn } from "@/lib/utils";
 
 /**
  * Two-field generate form for `/create` (Phase 2 task-07 + polish wave).
@@ -32,18 +34,31 @@ import { Textarea } from "@/components/ui/textarea";
  *
  * On error the form re-renders with the typed values preserved and an
  * inline banner showing the action's error copy.
+ *
+ * Phase 3 task-08: Pro users get a required Short/Medium/Long segmented
+ * control (no default — forces an explicit choice per D7). Starter and
+ * trial users don't see the picker; the form submits `postLength="medium"`
+ * via a hidden input so the action and service always receive a value.
  */
 export function GenerateForm({
   themePlaceholder,
   importantThingPlaceholder,
+  plan,
 }: {
   themePlaceholder: string;
   importantThingPlaceholder: string;
+  plan: SubscriptionPlan;
 }) {
   const [state, formAction, pending] = useActionState<
     GenerateActionState,
     FormData
   >(generateWeeklyAction, INITIAL_GENERATE_STATE);
+
+  // Only Pro users see the picker; tracks selection so the submit button can
+  // stay disabled until the user makes an explicit choice (D7: no default).
+  const [postLength, setPostLength] = useState<PostLength | null>(null);
+  const isPro = plan === "pro";
+  const submitDisabled = isPro && postLength === null;
 
   if (pending) {
     return <GeneratingState />;
@@ -81,6 +96,12 @@ export function GenerateForm({
         />
       </div>
 
+      {isPro ? (
+        <PostLengthPicker value={postLength} onChange={setPostLength} />
+      ) : (
+        <input type="hidden" name="postLength" value="medium" />
+      )}
+
       {state.error ? (
         <div
           role="alert"
@@ -93,6 +114,7 @@ export function GenerateForm({
       <Button
         type="submit"
         size="lg"
+        disabled={submitDisabled}
         className="w-full sm:w-auto rounded-full glow-champagne"
       >
         {pending ? (
@@ -105,5 +127,82 @@ export function GenerateForm({
         )}
       </Button>
     </form>
+  );
+}
+
+// =============================================================================
+// Post-length picker (Pro-only)
+// =============================================================================
+
+const POST_LENGTH_OPTIONS: ReadonlyArray<{ value: PostLength; label: string }> =
+  [
+    { value: "short", label: "Short" },
+    { value: "medium", label: "Medium" },
+    { value: "long", label: "Long" },
+  ];
+
+/**
+ * Segmented control built on native `<input type="radio">` so arrow-key
+ * navigation and form submission Just Work. The visible "pill" is the
+ * `<span>` inside each `<label>`; the input itself is visually hidden
+ * (`sr-only`) but remains focusable, which is what `peer-focus-visible`
+ * keys off for the focus ring.
+ */
+function PostLengthPicker({
+  value,
+  onChange,
+}: {
+  value: PostLength | null;
+  onChange: (next: PostLength) => void;
+}) {
+  return (
+    <div>
+      <span
+        id="post-length-label"
+        className="block text-sm font-medium mb-2"
+      >
+        Post length
+      </span>
+      <div
+        role="radiogroup"
+        aria-required="true"
+        aria-labelledby="post-length-label"
+        className="inline-flex rounded-full bg-muted p-1 border border-border"
+      >
+        {POST_LENGTH_OPTIONS.map((option) => {
+          const selected = value === option.value;
+          return (
+            <label
+              key={option.value}
+              className="relative cursor-pointer"
+            >
+              <input
+                type="radio"
+                name="postLength"
+                value={option.value}
+                required
+                checked={selected}
+                onChange={() => onChange(option.value)}
+                className="peer sr-only"
+              />
+              <span
+                className={cn(
+                  "block px-5 py-2 rounded-full text-sm font-medium transition-colors duration-200",
+                  "peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/30 peer-focus-visible:outline-none",
+                  selected
+                    ? "bg-primary text-primary-foreground"
+                    : "text-foreground hover:bg-accent/40"
+                )}
+              >
+                {option.label}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Short = scroll-stopper · Medium = conversational · Long = storytelling.
+      </p>
+    </div>
   );
 }

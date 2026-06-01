@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { GenerateForm } from "@/components/create/generate-form";
+import { QuotaGatedScreen } from "@/components/create/quota-gated-screen";
 import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
 import { TrialNote } from "@/components/create/trial-note";
 import { auth } from "@/lib/auth";
@@ -56,6 +57,35 @@ export default async function CreatePage() {
     }
   }
 
+  // Paid-user gate (Phase 3 task-07). The trial branch above handles the
+  // cancelled-recoverable nuance that `<QuotaGatedScreen />` deliberately
+  // doesn't replicate, so canGenerate only fires for non-trial users here.
+  // The 4-reason union (D13) maps 1:1 to the QuotaGatedScreen variants;
+  // `trial_batch_exists` is unreachable in this position but kept in the
+  // switch for exhaustiveness so a future canGenerate change can't
+  // silently fall through.
+  const gate = await subscriptionService.canGenerate(session.user.id);
+  if (!gate.allowed) {
+    switch (gate.reason) {
+      case "weekly_cap_active":
+        return (
+          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+        );
+      case "starter_platforms_overage":
+        return (
+          <QuotaGatedScreen
+            variant="overage"
+            currentCount={gate.currentCount}
+          />
+        );
+      case "plan_inactive":
+        return <QuotaGatedScreen variant="inactive" />;
+      case "trial_batch_exists":
+        // Unreachable — the explicit trial branch above already returns.
+        return null;
+    }
+  }
+
   const profile = await profileService.getProfile(session.user.id);
   const themePlaceholder = computeThemePlaceholder(profile);
   const importantThingPlaceholder = computeImportantThingPlaceholder(profile);
@@ -81,6 +111,7 @@ export default async function CreatePage() {
         <GenerateForm
           themePlaceholder={themePlaceholder}
           importantThingPlaceholder={importantThingPlaceholder}
+          plan={subscription.plan}
         />
       </div>
     </div>

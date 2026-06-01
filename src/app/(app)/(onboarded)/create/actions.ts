@@ -3,6 +3,7 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import type { PostLength } from "@/lib/schema";
 import { postService } from "@/lib/services";
 import type { GenerateActionState } from "./action-types";
 
@@ -47,15 +48,24 @@ export async function generateWeeklyAction(
     return { error: "Both fields are required." };
   }
 
+  // Phase 3 task-08: Pro users pick via the segmented control; Starter and
+  // trial users get a hidden `"medium"` input. Either way the field is
+  // present here; this branch is defensive (a stale or hand-crafted client
+  // could omit it).
+  const rawPostLength = formData.get("postLength");
+  if (
+    rawPostLength !== "short" &&
+    rawPostLength !== "medium" &&
+    rawPostLength !== "long"
+  ) {
+    return { error: "Pick a post length to continue." };
+  }
+  const postLength: PostLength = rawPostLength;
+
   const result = await postService.generateWeekly(session.user.id, {
     theme,
     importantThing,
-    // Phase 3 task-06: postLength is required at the service layer. The Pro-
-    // only picker / non-Pro default is owned by task-08's <GenerateForm />;
-    // until that wave lands, we hard-code "medium" so the contract compiles
-    // and existing callers behave exactly as they did before (D14: NULL ≡
-    // "medium" at render time).
-    postLength: "medium",
+    postLength,
   });
 
   if (result.ok) {
