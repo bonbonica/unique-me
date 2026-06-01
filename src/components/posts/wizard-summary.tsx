@@ -7,6 +7,7 @@ import {
   rescheduleAction,
   scheduleMyPickAction,
 } from "@/app/(app)/(onboarded)/posts/actions";
+import { DayLabel } from "@/components/posts/day-label";
 import { EditDialog } from "@/components/posts/edit-dialog";
 import {
   aspectRatioFor,
@@ -178,6 +179,7 @@ export function WizardSummary({
               <SummaryCard
                 key={`${item.post.id}:${item.platform}`}
                 item={item}
+                batchCreatedAt={batch.createdAt}
                 onRemove={() => handleRemove(item)}
               />
             ))}
@@ -238,9 +240,11 @@ function ScheduleButton({
 
 function SummaryCard({
   item,
+  batchCreatedAt,
   onRemove,
 }: {
   item: SummaryItem;
+  batchCreatedAt: Date;
   onRemove: () => void;
 }) {
   const { post, platform } = item;
@@ -254,6 +258,10 @@ function SummaryCard({
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
           Post {post.postOrder} / 7
         </span>
+        <DayLabel
+          postOrder={post.postOrder}
+          batchCreatedAt={batchCreatedAt}
+        />
         <NetworkBadge platform={platform} />
       </div>
 

@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { BUSINESS_TYPES } from "@/lib/profile/constants";
-import { type WebsiteAnalysis } from "@/lib/schema";
+import { type SubscriptionPlan, type WebsiteAnalysis } from "@/lib/schema";
 
 /**
  * Onboarding form client component (Phase 1, spec § 1.4).
@@ -119,7 +119,30 @@ const TONE_OPTIONS: ReadonlyArray<{
   { value: "mix", label: "Mix of both" },
 ];
 
-export function OnboardingForm() {
+/**
+ * Props for the onboarding form.
+ *
+ * `plan` is the user's current subscription plan, loaded by the parent
+ * server component (`(app)/onboarding/page.tsx`) via
+ * `subscriptionService.checkSubscription`. Phase 3 D6 / task-14 uses it to
+ * cap the platform picker at 2 for Starter users — Trial and Pro keep the
+ * existing min-1 / no-max behaviour. The service layer enforces the same
+ * cap server-side (Wave 2 task-04 — `profileService.saveProfile` throws
+ * `PLATFORMS_OVERAGE_FOR_PLAN`); the client cap here is a UX nicety, not
+ * the correctness gate.
+ */
+type OnboardingFormProps = {
+  plan: SubscriptionPlan;
+};
+
+/**
+ * Phase 3 D6 / task-14: maximum number of platforms a Starter-plan user
+ * can have selected at once. The picker blocks the toggle that would push
+ * a Starter past this cap.
+ */
+const STARTER_PLATFORMS_MAX = 2;
+
+export function OnboardingForm({ plan }: OnboardingFormProps) {
   const router = useRouter();
   const [state, formAction, pending] = useActionState(
     saveOnboardingAction,
@@ -140,6 +163,16 @@ export function OnboardingForm() {
   const [analysis, setAnalysis] = useState<WebsiteAnalysis | null>(null);
   const [analyzedUrl, setAnalyzedUrl] = useState<string>("");
   const [suggestedDescription, setSuggestedDescription] = useState<string>("");
+
+  // Phase 3 D6 / task-14: inline error surfaced when a Starter user clicks
+  // a third platform checkbox. Kept in local state (rather than baked into
+  // server `fieldErrors`) so the warning appears the moment the user
+  // triggers the block — no round-trip needed. Cleared whenever the
+  // platforms selection changes successfully (add of a new platform or
+  // remove of any), so it doesn't linger past the action that caused it.
+  const [clientOverageError, setClientOverageError] = useState<string | null>(
+    null
+  );
 
   // useTransition wraps the on-blur server action so the form stays
   // interactive while the scrape/analysis runs (5-10s).
@@ -241,13 +274,45 @@ export function OnboardingForm() {
     });
   }
 
+  /**
+   * Toggle a platform on/off in the picker.
+   *
+   * Phase 3 D6 / task-14: when the user is on the Starter plan and tries
+   * to check a third platform, the toggle is blocked and an inline
+   * `clientOverageError` is surfaced under the picker. We deliberately do
+   * NOT visually disable the third checkbox up-front — hiding "which
+   * platforms exist" is worse UX than letting the click happen and
+   * explaining what's blocking it (DESIGN.md § 14 voice: "explain what
+   * happened"). We also do not silently auto-uncheck another platform;
+   * the user explicitly picks which 2 to keep.
+   *
+   * Trial and Pro plans bypass this branch entirely and keep the
+   * pre-Phase-3 behaviour (no max — only the min-1 server-side check).
+   *
+   * Any successful state change (a new platform added, or any removed)
+   * clears the lingering error so it doesn't survive past the action
+   * that triggered it.
+   */
   function togglePlatform(value: PlatformValue, checked: boolean) {
+    if (
+      checked &&
+      plan === "starter" &&
+      !values.platforms.includes(value) &&
+      values.platforms.length >= STARTER_PLATFORMS_MAX
+    ) {
+      setClientOverageError(
+        "Starter plan covers 2 platforms. Uncheck one to switch."
+      );
+      return;
+    }
+
     setValues((prev) => {
       const next = checked
         ? Array.from(new Set([...prev.platforms, value]))
         : prev.platforms.filter((p) => p !== value);
       return { ...prev, platforms: next };
     });
+    setClientOverageError(null);
   }
 
   // The submit button stays disabled until every required field has a
@@ -565,9 +630,14 @@ export function OnboardingForm() {
             );
           })}
         </div>
-        {fieldErrors?.platforms ? (
+        {/* Combined error / hint slot for the platforms picker.
+            Precedence: client-side overage (most immediate — the user just
+            triggered it) > server-side field error (returned from the
+            action) > the neutral hint. Single <p> so the picker's height
+            doesn't shift between states. */}
+        {clientOverageError || fieldErrors?.platforms ? (
           <p className="mt-1.5 text-xs text-destructive">
-            {fieldErrors.platforms}
+            {clientOverageError ?? fieldErrors?.platforms}
           </p>
         ) : (
           <p className="mt-1.5 text-xs text-muted-foreground">

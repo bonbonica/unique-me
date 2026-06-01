@@ -206,6 +206,7 @@ export function NetworkWizard({
           platform={currentPlatform}
           posts={data.posts}
           batchTheme={data.batch.theme}
+          batchCreatedAt={data.batch.createdAt}
           selections={selections}
           onSetSelection={setSelection}
           onSelectAllForPlatform={selectAllForPlatform}

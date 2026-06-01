@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import { CheckSquare, Facebook, Instagram, Linkedin } from "lucide-react";
+import { DayLabel } from "@/components/posts/day-label";
 import { EditDialog } from "@/components/posts/edit-dialog";
 import {
   aspectRatioFor,
@@ -61,6 +62,7 @@ type SelectionsByPlatform = Record<SelectionPlatform, string[]>;
 export function WizardStep({
   platform,
   posts,
+  batchCreatedAt,
   selections,
   onSetSelection,
   onSelectAllForPlatform,
@@ -71,6 +73,7 @@ export function WizardStep({
   platform: SelectionPlatform;
   posts: BatchForReview["posts"];
   batchTheme: string;
+  batchCreatedAt: Date;
   selections: SelectionsByPlatform;
   onSetSelection: (
     postId: string,
@@ -162,6 +165,7 @@ export function WizardStep({
             key={post.id}
             post={post}
             platform={platform}
+            batchCreatedAt={batchCreatedAt}
             isSelected={selectedIds.includes(post.id)}
             onToggle={(next) => onSetSelection(post.id, platform, next)}
             mode={mode}
@@ -175,12 +179,14 @@ export function WizardStep({
 function PostCard({
   post,
   platform,
+  batchCreatedAt,
   isSelected,
   onToggle,
   mode,
 }: {
   post: PostWithExtras;
   platform: SelectionPlatform;
+  batchCreatedAt: Date;
   isSelected: boolean;
   onToggle: (next: boolean) => void;
   mode: "reviewing" | "cancelled";
@@ -193,10 +199,14 @@ function PostCard({
 
   return (
     <li className="bg-card rounded-2xl border border-border p-6 shadow-soft flex flex-col gap-4 card-interactive">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
           Post {post.postOrder} / 7
         </span>
+        <DayLabel
+          postOrder={post.postOrder}
+          batchCreatedAt={batchCreatedAt}
+        />
         {NETWORK_ICON[platform]}
       </div>
 

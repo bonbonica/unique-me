@@ -361,6 +361,24 @@ export async function saveOnboardingAction(
         error: "Some fields look invalid. Please review and try again.",
       };
     }
+    // Phase 3 D6 / task-14: Starter users are capped at 2 platforms. The
+    // form's client-side picker already blocks the third click, but a
+    // forged submit (or a plan that flipped to Starter mid-onboarding)
+    // can still slip past, so the service layer enforces the same cap
+    // (Wave 2 task-04). Map the thrown code to a field-level error so the
+    // platforms picker shows the inline message rather than a top-level
+    // banner. Copy here intentionally differs slightly from the
+    // client-side block message ("continue" vs "switch") to match the
+    // submit-time context.
+    if (err instanceof Error && err.message === "PLATFORMS_OVERAGE_FOR_PLAN") {
+      return {
+        ok: false,
+        fieldErrors: {
+          platforms:
+            "Starter plan covers 2 platforms — uncheck one to continue.",
+        },
+      };
+    }
     // Unexpected DB failure — log server-side and surface a generic error.
     console.error("[onboarding] saveProfile failed", err);
     return {

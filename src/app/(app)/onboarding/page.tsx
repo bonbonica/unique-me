@@ -2,7 +2,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { OnboardingForm } from "@/components/onboarding/onboarding-form";
 import { auth } from "@/lib/auth";
-import { profileService } from "@/lib/services";
+import { profileService, subscriptionService } from "@/lib/services";
 
 /**
  * Onboarding page (Phase 1, spec § 1.4).
@@ -36,6 +36,17 @@ export default async function OnboardingPage() {
     redirect("/api/internal/sync-profile?to=/dashboard");
   }
 
+  // Phase 3 D6 (task-14): the onboarding platform picker enforces a max of
+  // 2 platforms for Starter users. In practice fresh signups are always on
+  // `free_trial` at this point (the trial row is created by Better Auth's
+  // user-create hook before we land here, and paid plans are only set via
+  // the DB after onboarding has run). We still pull the snapshot for the
+  // rare future "re-onboarding for an existing Starter" scenario so the
+  // cap is correct without a second code path.
+  const subscription = await subscriptionService.checkSubscription(
+    session.user.id
+  );
+
   // Pull the greeting name straight from the session. Better Auth guarantees
   // `name` is set on the user record (we wired it as `notNull()` in the
   // `user` table); fall back to "there" only as a paranoid default.
@@ -53,7 +64,7 @@ export default async function OnboardingPage() {
             like you. One minute, once. Edit anytime in Settings.
           </p>
         </header>
-        <OnboardingForm />
+        <OnboardingForm plan={subscription.plan} />
       </div>
     </div>
   );

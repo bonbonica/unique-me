@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Calendar, Loader2 } from "lucide-react";
 import { stopBatchAction } from "@/app/(app)/(onboarded)/posts/actions";
+import { DayLabel } from "@/components/posts/day-label";
 import {
   aspectRatioFor,
   hashtagsFor,
@@ -157,6 +158,7 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
             <LockedCard
               key={`${item.post.id}:${item.platform}`}
               item={item}
+              batchCreatedAt={data.batch.createdAt}
             />
           ))}
         </ul>
@@ -188,7 +190,13 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
  * controls. Adds a Phase-4-shaped "Scheduled for" line so the calendar
  * step has a slot to populate without revisiting the card layout.
  */
-function LockedCard({ item }: { item: SummaryItem }) {
+function LockedCard({
+  item,
+  batchCreatedAt,
+}: {
+  item: SummaryItem;
+  batchCreatedAt: Date;
+}) {
   const { post, platform } = item;
   const text = textFor(post, platform);
   const hashtags = hashtagsFor(post, platform);
@@ -210,17 +218,17 @@ function LockedCard({ item }: { item: SummaryItem }) {
         Image — Phase 3
       </div>
 
-      {/* Phase-4 date slot. "Day N" is the durable label (see
-          SCHEDULED_TIME_PLACEHOLDER comment above for rolling-window
-          architecture). The trailing "scheduled time pending" is the
-          Phase-2 holding copy; Phase 4 will swap it for the real
-          timezone-aware date once the calendar / cron lands. */}
+      {/* Phase-4 date slot. `<DayLabel />` resolves the weekday in the
+          user's browser timezone (Phase 3 spec D8). The trailing
+          "scheduled time pending" is the Phase-2 holding copy; Phase 4
+          will swap it for the real time once the calendar / cron lands. */}
       <p className="text-xs text-muted-foreground flex items-center gap-1.5">
         <Calendar className="size-3.5 shrink-0" aria-hidden />
         <span>
-          <span className="text-foreground font-medium">
-            Day {post.postOrder}
-          </span>{" "}
+          <DayLabel
+            postOrder={post.postOrder}
+            batchCreatedAt={batchCreatedAt}
+          />{" "}
           — {SCHEDULED_TIME_PLACEHOLDER}
         </span>
       </p>

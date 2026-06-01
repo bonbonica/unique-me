@@ -1,22 +1,58 @@
-import { Sparkles } from "lucide-react";
+import { headers } from "next/headers";
+import { PlanSection } from "@/components/settings/plan-section";
+import { auth } from "@/lib/auth";
+import { profileService, subscriptionService } from "@/lib/services";
 
 /**
- * Phase 5 expands this into the 4-tab Settings page (profile, connected
- * accounts, subscription, notifications). Placeholder copy for Phase 1.
+ * Phase 3 task-13: the Plan section is the first real card on this page.
+ * Profile, connected-accounts, and notification sections arrive in later
+ * phases. The (onboarded) layout already redirects unauthenticated
+ * visitors; the page still re-resolves the session and guards on `null` to
+ * satisfy the type narrower without a non-null assertion (same pattern as
+ * `<DashboardPage />`).
+ *
+ * The starter-overage signal is derived here rather than inside the
+ * service: `subscriptionService.canGenerate` produces a typed reason for
+ * the gate path, but this card is informational only and doesn't need to
+ * call the full gate — a Starter plan + > 2 platforms is the same
+ * condition the gate checks (D6).
  */
-export default function SettingsPage() {
+export default async function SettingsPage() {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) {
+    return null;
+  }
+
+  const [subscription, profile] = await Promise.all([
+    subscriptionService.checkSubscription(session.user.id),
+    profileService.getProfile(session.user.id),
+  ]);
+
+  const platformOverage =
+    subscription.plan === "starter" &&
+    profile !== null &&
+    profile.platforms.length > 2
+      ? { count: profile.platforms.length }
+      : null;
+
   return (
-    <div className="max-w-2xl space-y-4">
-      <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 text-primary border border-primary/30 px-3 py-1 text-xs font-medium tracking-wider uppercase">
-        <Sparkles className="size-3" />
-        Coming soon
-      </div>
-      <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-        Settings
-      </h1>
-      <p className="text-lg text-muted-foreground leading-8">
-        Profile, connected accounts, subscription, and notifications.
-      </p>
+    <div className="max-w-2xl space-y-12">
+      <header className="space-y-4">
+        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+          Settings
+        </h1>
+        <p className="text-lg text-muted-foreground leading-8">
+          Profile, connected accounts, subscription, and notifications.
+        </p>
+      </header>
+
+      <PlanSection
+        plan={subscription.plan}
+        status={subscription.status}
+        daysLeftInTrial={subscription.daysLeftInTrial}
+        nextResetAt={subscription.nextResetAt}
+        platformOverage={platformOverage}
+      />
     </div>
   );
 }
