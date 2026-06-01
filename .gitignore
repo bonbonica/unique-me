@@ -48,6 +48,11 @@ public/uploads
 # private design docs (never commit — public repo)
 UniqueMe pdf/
 
+# brand-asset masters — original SVG / Illustrator files. Only the
+# optimized + used asset lives in public/. Keeps the project root tidy
+# while the masters stay local for future re-exports.
+design-assets/
+
 # wave prompts — local-only by policy. CC reads + writes per-wave prompt
 # files here (phase-2-wave-N-{slug}.md, etc.); the repo never sees them.
 prompts/
