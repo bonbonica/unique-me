@@ -1,10 +1,69 @@
 import { headers } from "next/headers";
 import Link from "next/link";
+import { NextBatchBanner } from "@/components/dashboard/next-batch-banner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
-import { subscriptionService } from "@/lib/services";
+import { postService, subscriptionService } from "@/lib/services";
 import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
+
+/**
+ * Banner render decision (spec § 6.5). Returned as a tagged union rather
+ * than a JSX element so the dashboard page stays trivially testable and
+ * the visibility rules live in one named function. `null` means "don't
+ * render" — trial users, first-time paid users, and the
+ * overage/inactive gate reasons all share that branch.
+ */
+type BannerDecision =
+  | { kind: "allowed" }
+  | { kind: "quota_active"; nextResetAt: Date }
+  | null;
+
+/**
+ * Spec § 6.5 visibility rules, in evaluation order:
+ *
+ *   1. Trial users and the defensive `free_trial` plan check → null.
+ *      Trial gets its own surfaces (trial strip, trial-gated screen).
+ *   2. Otherwise call `canGenerate`:
+ *      - `allowed === true` AND has at least one prior batch → allowed
+ *        banner with CTA. First-time paid users (allowed + no batch)
+ *        land at the empty `/create` form, so the banner stays hidden.
+ *      - `weekly_cap_active` → quota-active banner.
+ *      - `starter_platforms_overage` or `plan_inactive` → null. Those
+ *        reasons surface on `/create` and `/settings` respectively.
+ */
+async function decideBanner(
+  userId: string,
+  subscription: SubscriptionStateSnapshot,
+): Promise<BannerDecision> {
+  if (
+    subscription.status === "trial" ||
+    subscription.plan === "free_trial"
+  ) {
+    return null;
+  }
+
+  const gate = await subscriptionService.canGenerate(userId);
+
+  if (gate.allowed) {
+    // First-time paid users land at the empty /create form, not a
+    // dashboard banner — so the banner only appears once they have at
+    // least one prior batch to reset the rolling window against.
+    const lastBatch = await postService.getMostRecentBatch(userId);
+    if (!lastBatch) {
+      return null;
+    }
+    return { kind: "allowed" };
+  }
+
+  if (gate.reason === "weekly_cap_active") {
+    return { kind: "quota_active", nextResetAt: gate.nextResetAt };
+  }
+
+  // overage / inactive / trial_batch_exists (unreachable for non-trial)
+  // all suppress the banner — they have dedicated surfaces.
+  return null;
+}
 
 /**
  * Plan-name label used inside helper strings on the dashboard. Mirrors the
@@ -71,6 +130,7 @@ export default async function DashboardPage() {
   const subscription = await subscriptionService.checkSubscription(
     session.user.id,
   );
+  const banner = await decideBanner(session.user.id, subscription);
   const stats = buildStats(subscription);
 
   const firstName = session.user.name?.trim().split(/\s+/)[0] ?? null;
@@ -80,6 +140,19 @@ export default async function DashboardPage() {
 
   return (
     <div className="max-w-5xl">
+      {banner ? (
+        <div className="mb-8 sm:mb-12">
+          {banner.kind === "allowed" ? (
+            <NextBatchBanner state="allowed" nextResetAt={null} />
+          ) : (
+            <NextBatchBanner
+              state="quota_active"
+              nextResetAt={banner.nextResetAt}
+            />
+          )}
+        </div>
+      ) : null}
+
       <header className="space-y-3">
         <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
           {welcomeHeading}

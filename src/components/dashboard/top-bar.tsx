@@ -1,3 +1,4 @@
+import { QuotaCountdownPill } from "@/components/dashboard/quota-countdown-pill";
 import { TrialStrip } from "@/components/dashboard/trial-strip";
 import { PLAN_LABELS } from "@/lib/pricing";
 import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
@@ -39,13 +40,17 @@ export function DashboardTopBar({
       ) : null}
 
       {/*
-        Phase 1 placeholder: real post-count comes online in Phase 2 once
-        weekly_batches + posts services land. Wave 4 verification should
-        treat this string as a stub, not a contract.
+        Paid weekly-cap countdown. Mutually exclusive with the trial strip
+        above: `status === "trial"` and `status === "active"` can't both be
+        true, so at most one of these two pills ever renders. The pill is
+        also gated on `nextResetAt !== null` — that covers paid users with
+        no prior batch and cancelled/expired plans, both of which should
+        show only the plan pill itself.
       */}
-      <span className="text-xs text-muted-foreground">
-        7 posts ready this week
-      </span>
+      {subscription.status === "active" &&
+      subscription.nextResetAt !== null ? (
+        <QuotaCountdownPill nextResetAt={subscription.nextResetAt} />
+      ) : null}
     </div>
   );
 }

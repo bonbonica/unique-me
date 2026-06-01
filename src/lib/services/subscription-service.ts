@@ -31,6 +31,13 @@ export type SubscriptionStateSnapshot = {
   status: SubscriptionStatus;
   isActive: boolean;
   daysLeftInTrial: number | null;
+  /**
+   * Phase 3 task-11: paid-only countdown source. `null` for trial users (no
+   * rolling window), users with no prior batch, or inactive plans. When a
+   * real date is present, callers (TopBar countdown pill, dashboard banner)
+   * derive day counts from it without re-querying the DB.
+   */
+  nextResetAt: Date | null;
 };
 
 /**
@@ -119,6 +126,7 @@ export async function checkSubscription(
       status: "expired",
       isActive: false,
       daysLeftInTrial: null,
+      nextResetAt: null,
     };
   }
 
@@ -136,11 +144,19 @@ export async function checkSubscription(
     daysLeftInTrial = Math.max(0, Math.ceil((trialEnd - now) / MS_PER_DAY));
   }
 
+  // Delegate the rolling-window math to the existing standalone helper so
+  // there's exactly one implementation. Map its typed result onto the
+  // snapshot's `Date | null` shape — UI callers don't need the reason code,
+  // just the date (or absence thereof).
+  const resetInfo = await nextResetAt(userId);
+  const nextResetAtValue = resetInfo.at;
+
   return {
     plan,
     status,
     isActive,
     daysLeftInTrial,
+    nextResetAt: nextResetAtValue,
   };
 }
 
