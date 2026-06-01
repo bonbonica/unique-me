@@ -21,7 +21,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
@@ -79,6 +78,12 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
   const isCancelled = data.batch.status === "cancelled";
   const isScheduling = data.batch.status === "scheduling";
 
+  // Shared dialog state for the stop-batch flow. Lifted out of
+  // <StopBatchDialog /> so both the top-of-header trigger and the
+  // bottom-of-page trigger flip the same `open` flag and call the
+  // same confirm handler — one dialog instance, one source of truth.
+  const [stopOpen, setStopOpen] = useState(false);
+
   // All selections that exist in the persisted state. Unlike the wizard
   // summary, we don't filter by `data.platforms` here — a cancelled batch
   // may carry selections for platforms the user has since removed from
@@ -101,17 +106,34 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
-      <header className="space-y-2">
-        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-          {isCancelled
-            ? "Batch cancelled"
-            : "Your scheduled posts are here"}
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          {isCancelled
-            ? "This batch was cancelled. Nothing was posted."
-            : "Your selections are locked. Stopping will cancel the batch."}
-        </p>
+      <header
+        className={
+          isScheduling
+            ? "flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4"
+            : "space-y-2"
+        }
+      >
+        <div className="space-y-2 flex-1">
+          <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+            {isCancelled
+              ? "Batch cancelled"
+              : "Your scheduled posts are here"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            {isCancelled
+              ? "This batch was cancelled. Nothing was posted."
+              : "Your selections are locked. Stopping will cancel the batch."}
+          </p>
+        </div>
+        {isScheduling ? (
+          <Button
+            variant="destructive"
+            className="rounded-lg self-start sm:self-auto"
+            onClick={() => setStopOpen(true)}
+          >
+            Stop entire batch
+          </Button>
+        ) : null}
       </header>
 
       {isCancelled ? (
@@ -142,7 +164,18 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
 
       {isScheduling ? (
         <div className="border-t border-border pt-6">
-          <StopBatchDialog batchId={data.batch.id} />
+          <Button
+            variant="destructive"
+            className="rounded-lg"
+            onClick={() => setStopOpen(true)}
+          >
+            Stop entire batch
+          </Button>
+          <StopBatchDialog
+            batchId={data.batch.id}
+            open={stopOpen}
+            onOpenChange={setStopOpen}
+          />
         </div>
       ) : null}
     </div>
@@ -210,10 +243,22 @@ function LockedCard({ item }: { item: SummaryItem }) {
  * Server-side, {@link stopBatchAction} only succeeds when the batch is
  * currently in `"scheduling"` — the SQL guard prevents double-stops or
  * stops after Phase 4 transitions the batch to `"scheduled"`.
+ *
+ * Controlled component: `open` is owned by {@link LockedSummary} so the
+ * top-of-header and bottom-of-page triggers can share one dialog
+ * instance. `submitting` and `error` remain internal — they belong to
+ * the confirm flow itself.
  */
-function StopBatchDialog({ batchId }: { batchId: string }) {
+function StopBatchDialog({
+  batchId,
+  open,
+  onOpenChange,
+}: {
+  batchId: string;
+  open: boolean;
+  onOpenChange: (next: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -222,7 +267,12 @@ function StopBatchDialog({ batchId }: { batchId: string }) {
     setError(null);
     const result = await stopBatchAction(batchId);
     if (result.ok) {
-      setOpen(false);
+      onOpenChange(false);
+      // After a successful stop the page re-renders into the cancelled
+      // view (header copy changes, cancelled banner appears). Jumping
+      // instantly to the top lets the user land at the new top cleanly
+      // — a smooth scroll while the route segment refreshes feels choppy.
+      window.scrollTo({ top: 0, behavior: "instant" });
       router.refresh();
     } else {
       setError(stopErrorCopy(result.error));
@@ -234,16 +284,11 @@ function StopBatchDialog({ batchId }: { batchId: string }) {
     if (!next) {
       setError(null);
     }
-    setOpen(next);
+    onOpenChange(next);
   }
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger asChild>
-        <Button variant="destructive" className="rounded-lg">
-          Stop entire batch
-        </Button>
-      </DialogTrigger>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Stop entire batch?</DialogTitle>
