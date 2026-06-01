@@ -66,4 +66,10 @@ UniqueMe is built for Vercel. Connect the repo, set all env vars in the project 
 
 ## License
 
-Proprietary. © 2026 BonBonica LLC.
+UniqueMe is source-available under the [Functional Source License, Version 1.1, ALv2 Future License](./LICENSE.md) (FSL-1.1-ALv2).
+
+You may read, fork, and modify the source for any Permitted Purpose — internal business use, professional services on someone else's behalf, and non-commercial use are all allowed. You may not use it to provide a product or service that competes with UniqueMe.
+
+Two years after each release, that release automatically converts to Apache 2.0.
+
+© 2026 BonBonica LLC.
