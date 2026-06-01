@@ -18,9 +18,12 @@ import { postService } from "@/lib/services";
  *  - `in_progress` → stale/unreachable status; bounce to `/create`.
  *
  * Batch resolution: `?batchId=` query param wins. Without it, fall back
- * to {@link postService.getCurrentBatch} which returns the most recent
- * batch in `reviewing` or `scheduling` status — the post-Generate
- * redirect path.
+ * to {@link postService.getResumableBatch} which returns the most recent
+ * batch in any resumable status (`reviewing`, `scheduling`, `scheduled`,
+ * or `cancelled`) regardless of plan — so the sidebar "My Posts" link and
+ * the QuotaGatedScreen's "Return to your current batch" CTA can reach an
+ * existing batch even when `subscriptionService.canGenerate` would block
+ * a fresh one.
  */
 type SearchParams = Promise<{ batchId?: string }>;
 
@@ -36,7 +39,7 @@ export default async function PostsPage({
 
   let batchId = paramBatchId;
   if (!batchId) {
-    const current = await postService.getCurrentBatch(session.user.id);
+    const current = await postService.getResumableBatch(session.user.id);
     if (!current) {
       redirect("/create");
     }

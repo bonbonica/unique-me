@@ -147,10 +147,12 @@ export async function hasAnyBatch(userId: string): Promise<boolean> {
 }
 
 /**
- * Returns the most recent batch in `reviewing` or `scheduling` status, used
- * by `/posts` when no `?batchId=` query param is provided (the common case
- * right after Generate redirects). `cancelled` / `scheduled` / `completed`
- * batches don't surface — those are accessed via explicit `?batchId=...`.
+ * Most recent batch in `reviewing` or `scheduling` status. Narrow contract
+ * preserved for callers that explicitly want the "still being generated /
+ * reviewed / locked-but-not-yet-scheduled" window — i.e. the in-flight
+ * states immediately around generation. The bare-`/posts` fallback used to
+ * call this; it now calls {@link getResumableBatch} so a user with only a
+ * `scheduled` or `cancelled` batch can still navigate back to it.
  */
 export async function getCurrentBatch(
   userId: string
@@ -162,6 +164,42 @@ export async function getCurrentBatch(
       and(
         eq(weeklyBatches.userId, userId),
         inArray(weeklyBatches.status, ["reviewing", "scheduling"])
+      )
+    )
+    .orderBy(desc(weeklyBatches.createdAt))
+    .limit(1);
+
+  return batch ?? null;
+}
+
+/**
+ * Most recent batch in any *resumable* status — `reviewing`, `scheduling`,
+ * `scheduled`, or `cancelled`. Used by `/posts` when no `?batchId=` query
+ * param is supplied (sidebar "My Posts" link, the QuotaGatedScreen's
+ * "Return to your current batch" CTA).
+ *
+ * Resolves regardless of subscription plan — viewing or managing an
+ * existing batch is never gated. Only generating a *new* batch goes through
+ * `subscriptionService.canGenerate`.
+ *
+ * `completed` is excluded (Phase 4 owns that surface) and `in_progress` is
+ * excluded (stale/unreachable status; defensive).
+ */
+export async function getResumableBatch(
+  userId: string
+): Promise<WeeklyBatch | null> {
+  const [batch] = await db
+    .select()
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        inArray(weeklyBatches.status, [
+          "reviewing",
+          "scheduling",
+          "scheduled",
+          "cancelled",
+        ])
       )
     )
     .orderBy(desc(weeklyBatches.createdAt))
