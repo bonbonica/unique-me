@@ -346,7 +346,19 @@ export async function getBatchForReview(
  */
 export async function generateWeekly(
   userId: string,
-  input: { theme: string; importantThing: string; postLength: PostLength }
+  input: {
+    theme: string;
+    importantThing: string;
+    postLength: PostLength;
+    // Phase 4: 7 for trial / Starter / Pro batches 1–3; 9 for the Pro monthly
+    // bonus (batch 4 in a 30-day window). Caller (/create server action)
+    // computes and trusts the value — single-responsibility.
+    postCount: 7 | 9;
+    // Phase 4: 1..4 for Pro batches within the current 30-day period; null
+    // for Trial and Starter batches. Searching for "Pro batches" later is
+    // `WHERE batch_ordinal_in_period IS NOT NULL`.
+    batchOrdinalInPeriod: number | null;
+  }
 ): Promise<GenerateWeeklyResult> {
   const profile = await profileService.getProfile(userId);
   if (!profile) return { ok: false, error: "no_profile" };
@@ -364,6 +376,7 @@ export async function generateWeekly(
     theme: input.theme,
     importantThing: input.importantThing,
     postLength: input.postLength,
+    postCount: input.postCount,
   });
   if (!generated) return { ok: false, error: "ai_failed" };
 
@@ -376,7 +389,8 @@ export async function generateWeekly(
         theme: input.theme,
         importantThing: input.importantThing,
         postLength: input.postLength,
-        totalPosts: 7,
+        totalPosts: input.postCount,
+        batchOrdinalInPeriod: input.batchOrdinalInPeriod,
         acceptedPosts: 0,
         skippedPosts: 0,
         status: "reviewing",
@@ -432,7 +446,7 @@ export async function generateWeekly(
     return {
       ok: true,
       batchId: result.batchId,
-      postsCreated: 7,
+      postsCreated: input.postCount,
       variationsCreated: result.variationsCreated,
     };
   } catch (err) {
@@ -530,6 +544,8 @@ export async function regenerate(
       batchStatus: weeklyBatches.status,
       batchTheme: weeklyBatches.theme,
       batchImportant: weeklyBatches.importantThing,
+      batchPostLength: weeklyBatches.postLength,
+      batchTotalPosts: weeklyBatches.totalPosts,
     })
     .from(posts)
     .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
@@ -553,6 +569,10 @@ export async function regenerate(
     return { ok: false, error: "not_owned" };
   }
 
+  // totalPosts has a NOT NULL default 7, so it is always 7 or 9 in practice.
+  // Defensive narrow rejects unexpected stored values.
+  const postCount: 7 | 9 = row.batchTotalPosts === 9 ? 9 : 7;
+
   const result = await postGenerator.regenerateOne({
     profile,
     theme: row.batchTheme,
@@ -561,6 +581,8 @@ export async function regenerate(
     currentHashtags: row.post.hashtags,
     feedback,
     postOrder: row.post.postOrder,
+    postLength: (row.batchPostLength as PostLength | null) ?? "medium",
+    postCount,
   });
   if (!result) return { ok: false, error: "ai_failed" };
 

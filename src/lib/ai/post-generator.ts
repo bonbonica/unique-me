@@ -14,13 +14,15 @@ import type Anthropic from "@anthropic-ai/sdk";
  *    decide how to degrade.
  *
  * Two exported entry points:
- *  - {@link generate} — one call produces 7 canonical Facebook posts plus
- *    optional Instagram / LinkedIn variations per post.
+ *  - {@link generate} — one call produces N canonical Facebook posts (N is
+ *    either 7 for a normal weekly batch or 9 for the Pro monthly bonus
+ *    batch — see Phase 4 spec) plus optional Instagram / LinkedIn variations
+ *    per post.
  *  - {@link regenerateOne} — one call rewrites a single post given the user's
  *    feedback, plus its IG/LinkedIn variations.
  *
  * Notes on cost / latency:
- *  - `max_tokens: 8000` covers a worst-case Pro batch (7 × ~700 tokens of
+ *  - `max_tokens: 8000` covers a worst-case Pro batch (9 × ~700 tokens of
  *    canonical + IG + LinkedIn variants + hashtags). Below 4000 risks
  *    truncation; above 12000 is wasteful for our prompt-cache TTL window.
  *  - `cachedSystemPrompt` wraps the system text so repeated calls (e.g. a
@@ -76,14 +78,18 @@ const LENGTH_DIRECTIVES: Record<PostLength, string> = {
  * of the prompt is unchanged regardless of length so platform / tone / hashtag
  * rules stay stable across batches.
  */
-function buildSystemPrompt(profile: Profile, postLength: PostLength): string {
+function buildSystemPrompt(
+  profile: Profile,
+  postLength: PostLength,
+  postCount: 7 | 9
+): string {
   const base =
     "You are a social media content expert. You create engaging, authentic posts " +
     "that reflect the business owner's unique voice and personality. Each post " +
     "should feel like the business owner wrote it themselves, not like AI-generated " +
     "content.\n\n" +
     "You will receive a brand profile and a weekly brief. Use the brand profile to " +
-    "match tone, style, and audience. Make each of the 7 posts take a different " +
+    `match tone, style, and audience. Make each of the ${postCount} posts take a different ` +
     "angle on the weekly theme. Include relevant hashtags. Keep posts concise and " +
     "engaging — suitable for Instagram, Facebook, or LinkedIn.\n\n" +
     "THE BRAND PROFILE:\n" +
@@ -114,9 +120,9 @@ function buildSystemPrompt(profile: Profile, postLength: PostLength): string {
 
   const rules =
     "\nOUTPUT STRUCTURE:\n" +
-    "You must call the `save_weekly_posts` tool exactly once with 7 post objects.\n" +
+    `You must call the \`save_weekly_posts\` tool exactly once with ${postCount} post objects.\n` +
     "Each post object has:\n" +
-    "  - postOrder: 1..7\n" +
+    `  - postOrder: 1..${postCount}\n` +
     "  - postText: the canonical caption, written for Facebook\n" +
     "  - hashtags: array of relevant tags (no leading #)\n" +
     "  - variations: { instagram?, linkedin? }\n\n" +
@@ -132,7 +138,7 @@ function buildSystemPrompt(profile: Profile, postLength: PostLength): string {
     "The variations are NOT translations or trivial rewrites — they should feel native\n" +
     "to the platform while preserving the canonical post's core idea and the brand voice.\n\n" +
     "ANGLE VARIETY:\n" +
-    "Across the 7 canonical posts, take 7 different angles on the weekly theme.\n" +
+    `Across the ${postCount} canonical posts, take ${postCount} different angles on the weekly theme.\n` +
     "Examples: how-to, behind-the-scenes, customer story, contrarian take, practical tip,\n" +
     "question to the audience, personal reflection. Don't repeat the same structure twice.\n\n" +
     "VOICE GUARDRAILS:\n" +
@@ -158,84 +164,17 @@ function buildSystemPrompt(profile: Profile, postLength: PostLength): string {
 }
 
 // =============================================================================
-// Tool schema (generate — 7-post array)
+// Tool schema (regenerateOne — single-post)
 // =============================================================================
 
-/**
- * JSON Schema for the generate tool's input. The model returns 7 post objects
- * inside a `posts` array. The Zod schema below mirrors this and is the actual
- * enforcement boundary.
- */
-const POST_GENERATION_TOOL: Anthropic.Tool = {
-  name: TOOL_NAME,
-  description: "Persist the week's 7 social media posts.",
-  input_schema: {
-    type: "object",
-    properties: {
-      posts: {
-        type: "array",
-        minItems: 7,
-        maxItems: 7,
-        items: {
-          type: "object",
-          properties: {
-            postOrder: { type: "integer", minimum: 1, maximum: 7 },
-            postText: { type: "string", minLength: 20, maxLength: 2200 },
-            hashtags: {
-              type: "array",
-              items: { type: "string", maxLength: 60 },
-              maxItems: 15,
-            },
-            variations: {
-              type: "object",
-              properties: {
-                instagram: {
-                  type: "object",
-                  properties: {
-                    postText: {
-                      type: "string",
-                      minLength: 20,
-                      maxLength: 2200,
-                    },
-                    hashtags: {
-                      type: "array",
-                      items: { type: "string", maxLength: 60 },
-                      maxItems: 30,
-                    },
-                  },
-                  required: ["postText", "hashtags"],
-                },
-                linkedin: {
-                  type: "object",
-                  properties: {
-                    postText: {
-                      type: "string",
-                      minLength: 20,
-                      maxLength: 3000,
-                    },
-                    hashtags: {
-                      type: "array",
-                      items: { type: "string", maxLength: 60 },
-                      maxItems: 10,
-                    },
-                  },
-                  required: ["postText", "hashtags"],
-                },
-              },
-              required: [],
-            },
-          },
-          required: ["postOrder", "postText", "hashtags", "variations"],
-        },
-      },
-    },
-    required: ["posts"],
-  },
-};
+// The generate tool schema is built inline inside `generate` because its
+// `minItems` / `maxItems` / `postOrder.maximum` close over the runtime
+// `postCount` (7 or 9). Keeping it inline avoids a builder indirection and
+// keeps the JSON shape obvious at the call site.
 
 /**
  * Tool schema for the single-post regenerate path. Same per-post shape as
- * the array items above; the wrapper is gone.
+ * the items inside the generate tool's `posts` array; the wrapper is gone.
  */
 const REGENERATE_ONE_TOOL: Anthropic.Tool = {
   name: REGEN_TOOL_NAME,
@@ -295,20 +234,24 @@ const variationSchema = z.object({
   hashtags: z.array(z.string().max(60)).max(30),
 });
 
-const generatedSchema = z.object({
-  posts: z
-    .array(
-      z.object({
-        postOrder: z.number().int().min(1).max(7),
-        postText: z.string().min(20).max(2200),
-        hashtags: z.array(z.string().max(60)).max(15),
-        variations: z.object({
-          instagram: variationSchema.optional(),
-          linkedin: variationSchema.optional(),
-        }),
-      })
-    )
-    .length(7),
+// Per-post shape. `postOrder` is bounded by `postCount` at call time inside
+// `generate` (the actual revalidation schema rebuilds the postOrder bound);
+// the module-level version below keeps the loose `min(1)` so the exported
+// `Generated` type stays stable across both 7- and 9-post batches.
+const postObjectSchema = z.object({
+  postOrder: z.number().int().min(1),
+  postText: z.string().min(20).max(2200),
+  hashtags: z.array(z.string().max(60)).max(15),
+  variations: z.object({
+    instagram: variationSchema.optional(),
+    linkedin: variationSchema.optional(),
+  }),
+});
+
+// Shape only — the `.length(args.postCount)` constraint is applied inside
+// `generate`. Defined here so `Generated` is a single source of truth.
+const generatedShape = z.object({
+  posts: z.array(postObjectSchema),
 });
 
 const regeneratedOneSchema = z.object({
@@ -324,16 +267,18 @@ const regeneratedOneSchema = z.object({
 // Public types
 // =============================================================================
 
-export type Generated = z.infer<typeof generatedSchema>;
+export type Generated = z.infer<typeof generatedShape>;
 export type RegeneratedOne = z.infer<typeof regeneratedOneSchema>;
 
 // =============================================================================
-// generate — produce 7 posts in one call
+// generate — produce N posts in one call (N = 7 for weekly, 9 for Pro monthly)
 // =============================================================================
 
 /**
- * Generate the weekly batch. One Anthropic call → 7 canonical Facebook
- * captions, each with optional Instagram and LinkedIn variations.
+ * Generate the weekly batch. One Anthropic call → N canonical Facebook
+ * captions (N = 7 for a normal weekly batch, 9 for the Pro monthly bonus
+ * batch — see Phase 4 spec), each with optional Instagram and LinkedIn
+ * variations.
  *
  * Contract: never throws. Returns `null` on any failure:
  *  - Network error / Anthropic 5xx / timeout
@@ -352,16 +297,113 @@ export async function generate(args: {
   // value. NULL / undefined ≡ "medium" for back-compat with Phase 2 batches
   // generated before this column existed.
   postLength?: PostLength;
+  // Per Phase 4 spec: 7 for a normal weekly batch, 9 for the Pro monthly
+  // bonus batch (the 4th batch in a 30-day window for a Pro user). Required
+  // — no default — so the caller is forced to make the decision explicitly
+  // (a silent default would let batch 4 fail Zod re-validation on count).
+  postCount: 7 | 9;
 }): Promise<Generated | null> {
   try {
     const resolvedLength: PostLength = args.postLength ?? "medium";
-    const systemText = buildSystemPrompt(args.profile, resolvedLength);
+    const systemText = buildSystemPrompt(
+      args.profile,
+      resolvedLength,
+      args.postCount
+    );
+
+    // Built per-call because `minItems` / `maxItems` / `postOrder.maximum`
+    // depend on the runtime `postCount`. JSON-schema values are plain JS
+    // numbers, not interpolated strings.
+    const postGenerationTool: Anthropic.Tool = {
+      name: TOOL_NAME,
+      description: `Persist the week's ${args.postCount} social media posts.`,
+      input_schema: {
+        type: "object",
+        properties: {
+          posts: {
+            type: "array",
+            minItems: args.postCount,
+            maxItems: args.postCount,
+            items: {
+              type: "object",
+              properties: {
+                postOrder: {
+                  type: "integer",
+                  minimum: 1,
+                  maximum: args.postCount,
+                },
+                postText: { type: "string", minLength: 20, maxLength: 2200 },
+                hashtags: {
+                  type: "array",
+                  items: { type: "string", maxLength: 60 },
+                  maxItems: 15,
+                },
+                variations: {
+                  type: "object",
+                  properties: {
+                    instagram: {
+                      type: "object",
+                      properties: {
+                        postText: {
+                          type: "string",
+                          minLength: 20,
+                          maxLength: 2200,
+                        },
+                        hashtags: {
+                          type: "array",
+                          items: { type: "string", maxLength: 60 },
+                          maxItems: 30,
+                        },
+                      },
+                      required: ["postText", "hashtags"],
+                    },
+                    linkedin: {
+                      type: "object",
+                      properties: {
+                        postText: {
+                          type: "string",
+                          minLength: 20,
+                          maxLength: 3000,
+                        },
+                        hashtags: {
+                          type: "array",
+                          items: { type: "string", maxLength: 60 },
+                          maxItems: 10,
+                        },
+                      },
+                      required: ["postText", "hashtags"],
+                    },
+                  },
+                  required: [],
+                },
+              },
+              required: ["postOrder", "postText", "hashtags", "variations"],
+            },
+          },
+        },
+        required: ["posts"],
+      },
+    };
+
+    // Per-call Zod schema closes over `args.postCount`. The exported
+    // `Generated` type is derived from `generatedShape` at module scope
+    // (loose, no length constraint); applying `.length()` here narrows the
+    // runtime check without changing the static shape callers see.
+    const generatedSchema = z.object({
+      posts: z
+        .array(
+          postObjectSchema.extend({
+            postOrder: z.number().int().min(1).max(args.postCount),
+          })
+        )
+        .length(args.postCount),
+    });
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
       system: cachedSystemPrompt(systemText),
-      tools: [POST_GENERATION_TOOL],
+      tools: [postGenerationTool],
       tool_choice: { type: "tool", name: TOOL_NAME },
       messages: [
         {
@@ -370,14 +412,14 @@ export async function generate(args: {
             "THIS WEEK'S BRIEF:\n" +
             `- Theme: ${args.theme}\n` +
             `- The important thing to highlight: ${args.importantThing}\n\n` +
-            "Generate exactly 7 posts (postOrder 1 through 7). For each post " +
+            `Generate exactly ${args.postCount} posts (postOrder 1 through ${args.postCount}). For each post ` +
             "include an Instagram variation and a LinkedIn variation per the " +
             "rules in the system prompt.",
         },
       ],
     });
 
-    // Truncation is recoverable in principle (the schema's .length(7) check
+    // Truncation is recoverable in principle (the schema's .length check
     // would reject a partial response), but it's worth surfacing so we can
     // decide whether to bump max_tokens.
     if (response.stop_reason === "max_tokens") {
@@ -438,12 +480,21 @@ export async function regenerateOne(args: {
   postOrder: number;
   // Same semantics as `generate`: undefined ≡ "medium". Callers (postService
   // .regenerate) should pass the parent batch's stored postLength so the
-  // rewrite stays consistent with the surrounding 6 posts.
+  // rewrite stays consistent with the surrounding posts.
   postLength?: PostLength;
+  // Size of the parent batch (7 for a normal weekly batch, 9 for the Pro
+  // monthly bonus batch). Used so the user message ("post X of N") and the
+  // system prompt reflect the correct total. Required — same rationale as
+  // `generate`.
+  postCount: 7 | 9;
 }): Promise<RegeneratedOne | null> {
   try {
     const resolvedLength: PostLength = args.postLength ?? "medium";
-    const systemText = buildSystemPrompt(args.profile, resolvedLength);
+    const systemText = buildSystemPrompt(
+      args.profile,
+      resolvedLength,
+      args.postCount
+    );
 
     const response = await anthropic.messages.create({
       model: CLAUDE_MODEL,
@@ -458,7 +509,7 @@ export async function regenerateOne(args: {
             "THIS WEEK'S BRIEF:\n" +
             `- Theme: ${args.theme}\n` +
             `- The important thing to highlight: ${args.importantThing}\n\n` +
-            `You are rewriting post ${args.postOrder} of 7. The user wasn't ` +
+            `You are rewriting post ${args.postOrder} of ${args.postCount}. The user wasn't ` +
             "happy with the first version. Rewrite it taking their feedback " +
             "into account. Keep the same overall slot in the week (don't " +
             "duplicate angles you might use for other posts); produce IG and " +

@@ -71,6 +71,14 @@ export default async function CreatePage() {
         return (
           <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
         );
+      case "monthly_cap_active":
+        // Temporary: reuses the weekly_cap_active "quota" variant so the
+        // wave compiles. Task 13 (Wave 4) introduces a dedicated
+        // `variant="monthly_quota"` with the 4-of-4-batches copy + the
+        // `batchesUsed` field; swap this arm there.
+        return (
+          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+        );
       case "starter_platforms_overage":
         return (
           <QuotaGatedScreen

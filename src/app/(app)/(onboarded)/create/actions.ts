@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import type { PostLength } from "@/lib/schema";
-import { postService } from "@/lib/services";
+import { postService, subscriptionService } from "@/lib/services";
 import type { GenerateActionState } from "./action-types";
 
 /**
@@ -62,10 +62,30 @@ export async function generateWeeklyAction(
   }
   const postLength: PostLength = rawPostLength;
 
+  // Phase 4 task-12: derive the Pro batch ordinal + postCount server-side.
+  // `proQuota.used` is the count BEFORE this insert, so the new batch's
+  // ordinal is `used + 1`. Non-Pro plans expose `proQuota === null` and so
+  // pass `batchOrdinalInPeriod: null` + the 7-post default. Only ordinal 4
+  // — the final Pro batch in a 30-day period — generates 9 posts.
+  //
+  // Race note: a sibling tab could insert between this snapshot read and
+  // the service's own gate re-check, mis-recording the ordinal column.
+  // Phase 4 Section A accepts that risk given low expected concurrency;
+  // the downstream gate inside `generateWeekly` still blocks an actual
+  // 5th batch from landing.
+  const snapshot = await subscriptionService.checkSubscription(session.user.id);
+  const batchOrdinalInPeriod =
+    snapshot.plan === "pro" && snapshot.proQuota
+      ? snapshot.proQuota.used + 1
+      : null;
+  const postCount: 7 | 9 = batchOrdinalInPeriod === 4 ? 9 : 7;
+
   const result = await postService.generateWeekly(session.user.id, {
     theme,
     importantThing,
     postLength,
+    postCount,
+    batchOrdinalInPeriod,
   });
 
   if (result.ok) {
