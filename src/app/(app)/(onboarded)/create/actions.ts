@@ -79,6 +79,7 @@ export async function generateWeeklyAction(
       };
     case "trial_batch_exists":
     case "weekly_cap_active":
+    case "monthly_cap_active":
     case "starter_platforms_overage":
     case "plan_inactive":
       // The page-level gate (server-rendered) normally catches these before

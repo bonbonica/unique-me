@@ -62,6 +62,7 @@ export type GenerateWeeklyResult =
         | "no_profile"
         | "trial_batch_exists"
         | "weekly_cap_active"
+        | "monthly_cap_active"
         | "starter_platforms_overage"
         | "plan_inactive"
         | "ai_failed"
