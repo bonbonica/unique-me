@@ -165,6 +165,11 @@ export const weeklyBatches = pgTable(
     theme: text("theme").notNull(),
     importantThing: text("important_thing").notNull(),
     totalPosts: integer("total_posts").default(7).notNull(),
+    // Pro-only: 1..4 ordinal slot this batch occupies within the user's
+    // current 30-day Pro period (D-A9). Nullable because Starter/Trial batches
+    // have no meaningful ordinal — the union {1,2,3,4} is enforced at the
+    // service layer, not the DB (matches the enum-as-text convention).
+    batchOrdinalInPeriod: integer("batch_ordinal_in_period"),
     acceptedPosts: integer("accepted_posts").default(0).notNull(),
     skippedPosts: integer("skipped_posts").default(0).notNull(),
     // Union: "in_progress" | "reviewing" | "scheduling" | "scheduled" | "completed".
@@ -347,6 +352,11 @@ export const subscriptions = pgTable(
       .notNull(),
     // Not updatedAt: that bumps on unrelated writes (postsUsedThisMonth, etc.), so plan-change detection (D5) needs its own column.
     planChangedAt: timestamp("plan_changed_at").notNull().defaultNow(),
+    // Immutable anchor for the Pro rolling 30-day quota window (D-A7). Set
+    // when the row is created; rolled forward by the period-tick logic when
+    // a new period starts. Unused for trial/Starter rows but kept NOT NULL
+    // with a `now()` default so every row has a stable value.
+    periodStartDate: timestamp("period_start_date").notNull().defaultNow(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

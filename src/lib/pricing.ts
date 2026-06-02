@@ -3,6 +3,12 @@
 
 import type { SubscriptionPlan } from "@/lib/schema";
 
+// Phase 4 Pro monthly quota — see specs/phase-4-pro-monthly-quota/spec.md § 1.
+export const MAX_BATCHES_PER_PERIOD = 4;
+export const ROLLING_PERIOD_DAYS = 30;
+export const STANDARD_BATCH_POSTS = 7;
+export const PRO_LONG_BATCH_POSTS = 9;
+
 export type PlanDetails = {
   label: string;
   monthlyPriceUsd: number; // 0 sentinel = render as "Free"
@@ -35,9 +41,9 @@ export const PLAN_DETAILS: Record<SubscriptionPlan, PlanDetails> = {
   pro: {
     label: "Pro",
     monthlyPriceUsd: 19.99,
-    pitch: "1 batch per week, all platforms",
+    pitch: "4 batches per month, all platforms",
     features: [
-      "1 batch / week",
+      "4 batches / month",
       "All 3 platforms (pick 1–3)",
       "Pick post length (short / medium / long)",
     ],

@@ -43,6 +43,13 @@
       "when": 1780273033635,
       "tag": "0005_stormy_ronan",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1780354657041,
+      "tag": "0006_previous_iron_fist",
+      "breakpoints": true
     }
   ]
 }
