@@ -1,6 +1,7 @@
 {
   "name": "uniqueme",
   "version": "0.1.0",
+  "packageManager": "pnpm@11.5.0",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "pnpm run db:migrate && next build",
