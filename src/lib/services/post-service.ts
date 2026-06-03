@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
 import {
@@ -127,6 +127,90 @@ export type BatchForReview = {
   >;
 };
 
+/**
+ * Card shape for the Create Posts hub's unscheduled-batches list. Returned
+ * by {@link getUnscheduledBatchesForUser}; consumed by `<UnscheduledBatchList />`
+ * and `<UnscheduledBatchCard />`. `status` is narrowed to the subset of
+ * `weeklyBatches.status` values that surface on the hub.
+ */
+export type UnscheduledBatchCard = {
+  id: string;
+  theme: string;
+  importantThing: string;
+  totalPosts: number;
+  status: "reviewing" | "cancelled";
+  counts: { facebook: number; instagram: number; linkedin: number };
+};
+
+/**
+ * Box-shaped data for a single "current period" batch on the Scheduled page.
+ * Returned inside {@link ScheduledView.current} by
+ * {@link getScheduledViewForUser}; consumed by `<ScheduledBatchBox />`.
+ *
+ * Stage-1 dormant contract — three fields ride along today as safe defaults
+ * but will activate when Phase 4 (`scheduleService`) and Phase 7
+ * (`postingService`) ship without any component changes:
+ *  - `derivedState`: always `"upcoming"` in Stage-1. Phase 4 flips it to
+ *    `"currently_posting"` when `scheduled_posts` rows exist for the batch
+ *    with `status='posted'` AND at least one row is still `status='pending'`
+ *    with `scheduledTime > now()`.
+ *  - `alreadyPostedCount`: always `0` in Stage-1. Phase 7 populates with
+ *    `COUNT(scheduled_posts.status='posted')` per batch.
+ *  - `queuedCount`: always equal to `totalPosts` in Stage-1. Phase 7 sets it
+ *    to `totalPosts - alreadyPostedCount`.
+ */
+export type BatchBoxData = {
+  id: string;
+  /**
+   * `weeklyBatches.batchOrdinalInPeriod`. Pro: 1–4. Trial / Starter: `null`
+   * (those plans never need disambiguating between concurrent batches).
+   */
+  ordinal: number | null;
+  theme: string;
+  importantThing: string;
+  totalPosts: number;
+  counts: { facebook: number; instagram: number; linkedin: number };
+  // Stage-1 dormant: see type-level docblock above.
+  derivedState: "upcoming" | "currently_posting";
+  // Stage-1 dormant: see type-level docblock above.
+  alreadyPostedCount: number;
+  // Stage-1 dormant: see type-level docblock above.
+  queuedCount: number;
+};
+
+/**
+ * Compact row for the "Past Batches" disclosure on the Scheduled page.
+ * Returned inside {@link ScheduledView.past} by
+ * {@link getScheduledViewForUser}; consumed by `<PastBatchesList />`.
+ *
+ * `completedAt` is a Stage-1 proxy — the schema has no dedicated column yet,
+ * so we use `weeklyBatches.createdAt`. Phase 7 will either add a real
+ * `completedAt` column or derive it from the last `scheduled_posts.postedAt`
+ * once a posting service exists to mark batches `completed`; the public type
+ * stays unchanged.
+ */
+export type PastBatchRow = {
+  id: string;
+  ordinal: number | null;
+  theme: string;
+  totalPosts: number;
+  completedAt: Date;
+};
+
+/**
+ * Bundle returned by {@link getScheduledViewForUser}. Carries the two row
+ * lists plus the rolling-30-day window dates so the page can render a
+ * "Resets in Nd" hint without re-querying the subscription. Window length is
+ * always exactly 30 days in milliseconds (`periodEndsAt - periodStartDate ===
+ * 30 * DAY_MS`).
+ */
+export type ScheduledView = {
+  current: BatchBoxData[];
+  past: PastBatchRow[];
+  periodStartDate: Date;
+  periodEndsAt: Date;
+};
+
 // =============================================================================
 // Existence + simple reads
 // =============================================================================
@@ -227,6 +311,248 @@ export async function getMostRecentBatch(
     .limit(1);
 
   return batch ?? null;
+}
+
+/**
+ * Bulk-load per-network selection counts for a set of batches. One query for
+ * all batches; rows are aggregated in the DB via GROUP BY so we never pull
+ * raw selection rows into JS just to count them.
+ *
+ * The returned map is keyed by `batchId` and every requested id is pre-seeded
+ * with `{ facebook: 0, instagram: 0, linkedin: 0 }`, so callers can do
+ * `map.get(id)` without a nullish-coalesce fallback. The empty-input case
+ * returns an empty Map without issuing a query — `inArray(..., [])` produces
+ * a `WHERE col IN ()` clause that Postgres rejects.
+ *
+ * Module-private on purpose: it's the same shape both the Create Posts hub
+ * cards (`getUnscheduledBatchesForUser`) and the Scheduled view boxes
+ * (`getScheduledViewForUser`) need; duplicating the query in two readers
+ * would let them drift out of sync with what `<NetworkWizard />` shows.
+ */
+async function loadSelectionCounts(
+  batchIds: string[]
+): Promise<Map<string, { facebook: number; instagram: number; linkedin: number }>> {
+  const countsByBatch = new Map<
+    string,
+    { facebook: number; instagram: number; linkedin: number }
+  >();
+  for (const id of batchIds) {
+    countsByBatch.set(id, { facebook: 0, instagram: 0, linkedin: 0 });
+  }
+
+  if (batchIds.length === 0) return countsByBatch;
+
+  // Join path: post_selections.postId → posts.id → posts.batchId. There is no
+  // direct post_selections.batchId column. Aggregating in SQL keeps memory
+  // bounded regardless of how many selection rows exist per batch.
+  const selectionRows = await db
+    .select({
+      batchId: posts.batchId,
+      platform: postSelections.platform,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(postSelections)
+    .innerJoin(posts, eq(postSelections.postId, posts.id))
+    .where(inArray(posts.batchId, batchIds))
+    .groupBy(posts.batchId, postSelections.platform);
+
+  for (const row of selectionRows) {
+    // Defensive: posts.batchId is non-null at the schema level, but the join
+    // projection types it as nullable. Skip the (impossible) null case rather
+    // than assert with `!` so a future schema change can't introduce a silent
+    // miscount.
+    if (!row.batchId) continue;
+    const bucket = countsByBatch.get(row.batchId);
+    if (!bucket) continue;
+    if (row.platform === "facebook") bucket.facebook = row.count;
+    else if (row.platform === "instagram") bucket.instagram = row.count;
+    else if (row.platform === "linkedin") bucket.linkedin = row.count;
+  }
+
+  return countsByBatch;
+}
+
+/**
+ * Every batch the user owns that is currently sitting on the Create Posts
+ * hub — `status ∈ {reviewing, cancelled}`. Sorted newest-first so the most
+ * recently touched batch is the top card. Per-network counts come from
+ * `post_selections` (the same source `<NetworkWizard />` reads from) so the
+ * card's `FB N · IG N · LI N` row stays consistent with what the user sees
+ * when they click into the wizard.
+ *
+ * Pure read; no writes, no `canGenerate` interaction, no side effects.
+ * Capped at four rows in practice (Pro's max unscheduled-batch count), so
+ * no paging.
+ */
+export async function getUnscheduledBatchesForUser(
+  userId: string
+): Promise<UnscheduledBatchCard[]> {
+  const rows = await db
+    .select({
+      id: weeklyBatches.id,
+      theme: weeklyBatches.theme,
+      importantThing: weeklyBatches.importantThing,
+      totalPosts: weeklyBatches.totalPosts,
+      status: weeklyBatches.status,
+    })
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        inArray(weeklyBatches.status, ["reviewing", "cancelled"])
+      )
+    )
+    .orderBy(desc(weeklyBatches.createdAt));
+
+  if (rows.length === 0) return [];
+
+  const countsByBatch = await loadSelectionCounts(rows.map((r) => r.id));
+
+  return rows.map((r) => ({
+    id: r.id,
+    theme: r.theme,
+    importantThing: r.importantThing,
+    totalPosts: r.totalPosts,
+    // The DB column is the broader `weeklyBatchStatus` enum; the WHERE clause
+    // above narrows the actual values to this literal pair, so the cast is
+    // type-safe at runtime.
+    status: r.status as "reviewing" | "cancelled",
+    counts: countsByBatch.get(r.id) ?? {
+      facebook: 0,
+      instagram: 0,
+      linkedin: 0,
+    },
+  }));
+}
+
+/**
+ * Rolling window length in milliseconds for the Scheduled-page view (D-S8).
+ * Mirrors the constant `PERIOD_MS` derived from `ROLLING_PERIOD_DAYS` inside
+ * `subscription-service.ts`. Re-declared here as a local literal rather than
+ * imported because (a) it's used in exactly one place, and (b) the
+ * `subscription-service` export surface is intentionally kept narrow —
+ * `computeCurrentPeriodStart` is the helper the spec mandates we reuse.
+ */
+const SCHEDULED_VIEW_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Data bundle for the Scheduled page. Returns the user's "in-flight"
+ * (`status='scheduling'`) and "finished" (`status='completed'`) batches inside
+ * the current rolling 30-day quota window, plus the window dates themselves.
+ *
+ * Window definition (D-S8, all plans):
+ *  - Anchor = `subscriptions.periodStartDate` — the immutable column on the
+ *    subscription row. Surfaced through
+ *    {@link subscriptionService.SubscriptionStateSnapshot#periodStartDate}.
+ *  - Current period start = `floor((now - anchor) / 30d) * 30d + anchor`.
+ *    Pure JS, no DB write. Delegates to
+ *    {@link subscriptionService.computeCurrentPeriodStart} so the formula
+ *    cannot drift between Pro's gate math and this read.
+ *  - Window length = exactly 30 days (`periodEndsAt - periodStartDate`).
+ *
+ * Sort order: both lists are `createdAt ASC` (oldest first). Pro callers see
+ * `batchOrdinalInPeriod` 1 → 4 reading top-to-bottom.
+ *
+ * Cancelled batches are deliberately excluded (D-S9) — they live on the Create
+ * Posts hub as re-schedulable cards, not on the Scheduled page.
+ *
+ * Stage-1 dormant fields on each `current` row default to the safe values
+ * documented on {@link BatchBoxData}. Phase 4/7 will populate them from
+ * `scheduled_posts` without touching the public return type.
+ *
+ * Query plan: one SELECT for the batches (status IN ('scheduling','completed')
+ * AND createdAt >= periodStart AND userId match), one bulk SELECT for per-
+ * network selection counts via {@link loadSelectionCounts} (only for the
+ * `scheduling` rows — past rows don't carry counts on the UI). No N+1.
+ */
+export async function getScheduledViewForUser(
+  userId: string
+): Promise<ScheduledView> {
+  // D-S8 anchor: read the rolling-window start from the subscription snapshot.
+  // The snapshot exposes `periodStartDate` for all plans (widened in this same
+  // task), so Trial / Starter / Pro all share one code path here.
+  const snapshot = await subscriptionService.checkSubscription(userId);
+  const now = new Date();
+  const periodStartDate = subscriptionService.computeCurrentPeriodStart(
+    snapshot.periodStartDate,
+    now
+  );
+  const periodEndsAt = new Date(
+    periodStartDate.getTime() + SCHEDULED_VIEW_PERIOD_MS
+  );
+
+  const rows = await db
+    .select({
+      id: weeklyBatches.id,
+      theme: weeklyBatches.theme,
+      importantThing: weeklyBatches.importantThing,
+      totalPosts: weeklyBatches.totalPosts,
+      status: weeklyBatches.status,
+      ordinal: weeklyBatches.batchOrdinalInPeriod,
+      createdAt: weeklyBatches.createdAt,
+    })
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        // D-S9: cancelled is intentionally excluded — it lives on Create Posts.
+        // `reviewing` and `in_progress` are also excluded by absence from this
+        // list (status enum is { reviewing | scheduling | scheduled |
+        // in_progress | completed | cancelled }).
+        inArray(weeklyBatches.status, ["scheduling", "completed"]),
+        gte(weeklyBatches.createdAt, periodStartDate)
+      )
+    )
+    // ASC so Pro's `batchOrdinalInPeriod` reads 1 → 4 top-to-bottom on the page.
+    .orderBy(asc(weeklyBatches.createdAt));
+
+  // Past rows don't need selection counts (the UI shows date + theme + total
+  // only), so only load counts for the scheduling rows. Empty input is handled
+  // inside `loadSelectionCounts` — it returns an empty Map without a query.
+  const schedulingIds = rows
+    .filter((r) => r.status === "scheduling")
+    .map((r) => r.id);
+  const countsByBatch = await loadSelectionCounts(schedulingIds);
+
+  const current: BatchBoxData[] = rows
+    .filter((r) => r.status === "scheduling")
+    .map((r) => ({
+      id: r.id,
+      ordinal: r.ordinal,
+      theme: r.theme,
+      importantThing: r.importantThing,
+      totalPosts: r.totalPosts,
+      // `loadSelectionCounts` pre-seeds every requested id, so the nullish
+      // fallback here is defensive only — keeps the type narrowed without
+      // requiring a non-null assertion.
+      counts: countsByBatch.get(r.id) ?? {
+        facebook: 0,
+        instagram: 0,
+        linkedin: 0,
+      },
+      // Stage-1 dormant defaults — see BatchBoxData docblock. Phase 4/7 will
+      // compute real values from `scheduled_posts` without changing this
+      // function's signature.
+      derivedState: "upcoming" as const,
+      alreadyPostedCount: 0,
+      queuedCount: r.totalPosts,
+    }));
+
+  const past: PastBatchRow[] = rows
+    .filter((r) => r.status === "completed")
+    .map((r) => ({
+      id: r.id,
+      ordinal: r.ordinal,
+      theme: r.theme,
+      totalPosts: r.totalPosts,
+      // Stage-1: no `completedAt` column on `weeklyBatches` yet — use
+      // `createdAt` as a proxy. Phase 7 will populate a real `completedAt`
+      // (or derive from the latest `scheduled_posts.postedAt`) and the
+      // mapping below switches to that source. Public type unchanged.
+      completedAt: r.createdAt,
+    }));
+
+  return { current, past, periodStartDate, periodEndsAt };
 }
 
 /**

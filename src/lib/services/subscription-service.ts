@@ -48,6 +48,22 @@ export type SubscriptionStateSnapshot = {
    */
   nextResetAt: Date | null;
   /**
+   * Scheduled-page redesign (D-S8): the raw rolling-30-day quota anchor. Always
+   * present — the DB column is NOT NULL with a `now()` default, so every
+   * subscription row has one. Consumers needing the *current* period window
+   * (e.g. `postService.getScheduledViewForUser`) pass this through
+   * {@link computeCurrentPeriodStart} together with `now()` to compute
+   * `periodStartDate` / `periodEndsAt` for **all plans**, not just Pro. For
+   * Pro, the value here equals `proQuota.periodEndsAt - 30d`; surfaced as a
+   * top-level field so Trial/Starter readers don't have to special-case the
+   * `proQuota === null` branch.
+   *
+   * The defensive snapshot returned when no subscription row exists uses
+   * `new Date()` here — a single safe value the windowing helper can subtract
+   * a period from without crashing. Real users always have a real anchor.
+   */
+  periodStartDate: Date;
+  /**
    * Phase 4 D-A19: Pro monthly quota snapshot. Non-null only for active Pro
    * users. `max` is a literal `4` (intentionally duplicating
    * `MAX_BATCHES_PER_PERIOD`) so the type is self-describing — consumers can
@@ -145,6 +161,11 @@ export async function checkSubscription(
       isActive: false,
       daysLeftInTrial: null,
       nextResetAt: null,
+      // Defensive default — see SubscriptionStateSnapshot#periodStartDate. The
+      // missing-row branch is unreachable in production (`startTrial` runs on
+      // every signup), but the column is non-nullable in every reachable case
+      // so the snapshot type stays the same shape.
+      periodStartDate: new Date(),
       proQuota: null,
     };
   }
@@ -193,6 +214,12 @@ export async function checkSubscription(
     isActive,
     daysLeftInTrial,
     nextResetAt: nextResetAtValue,
+    // D-S8: the immutable rolling-30-day anchor on the row. Surfaced for all
+    // plans so the Scheduled-page window helper works without a Pro special
+    // case. The Pro `proQuota.periodEndsAt` below is still
+    // `periodStartDate + 30d` (via `getProQuotaState`), so existing consumers
+    // are unaffected.
+    periodStartDate: row.periodStartDate,
     proQuota,
   };
 }
@@ -226,7 +253,7 @@ type ProQuotaState = {
 
 /**
  * Pure rollover helper — given the immutable subscription anchor and the
- * current time, returns the start of the current 30-day Pro period.
+ * current time, returns the start of the current 30-day period.
  *
  * Implements D-A11: `floor((now - anchor) / PERIOD_MS) * PERIOD_MS + anchor`.
  * The rolled-forward value is **never written back** to the row — this is the
@@ -237,8 +264,14 @@ type ProQuotaState = {
  * A future-dated anchor (clock skew, manual seeding) is handled by returning
  * the anchor itself — `elapsed < 0` would otherwise yield a negative period
  * count and place the period start ahead of the anchor.
+ *
+ * Exported (D-S8) so `postService.getScheduledViewForUser` can apply the same
+ * window math to Trial/Starter snapshots — the Scheduled page surfaces the
+ * current 30-day quota window for all plans, not just Pro. Re-implementing the
+ * formula in two places would let it drift; a single exported helper keeps
+ * Pro's gate math and the Scheduled page's window math in lockstep.
  */
-function computeCurrentPeriodStart(anchor: Date, now: Date): Date {
+export function computeCurrentPeriodStart(anchor: Date, now: Date): Date {
   const elapsed = now.getTime() - anchor.getTime();
   if (elapsed < 0) {
     // Future-dated anchor — guard against clock skew / manual seeding. The
