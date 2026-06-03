@@ -4,7 +4,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Calendar,
-  FileText,
   Image as ImageIcon,
   Settings,
   Sparkles,
@@ -13,13 +12,16 @@ import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * Sidebar navigation items, declared in the order specified by the Phase 1
- * spec (§ 1.6). Kept as a module-level const so both the desktop sidebar and
- * the mobile sheet drawer render identical items without prop drilling.
+ * Sidebar navigation items, declared in the order specified by the Scheduled
+ * + Create Posts redesign spec (§ 6.1). Kept as a module-level const so both
+ * the desktop sidebar and the mobile sheet drawer render identical items
+ * without prop drilling.
  *
- * `href` matching is prefix-aware: `/posts` should highlight while the user
- * is on `/posts/{batchId}/review`, etc. The matcher in `isActive` below
- * enforces that.
+ * `href` matching is prefix-aware so nested routes (e.g. `/create/*`) keep
+ * the parent item highlighted. The matcher in `isActive` below enforces that.
+ * "My Posts" was removed in this redesign — visiting `/posts` or
+ * `/posts/{batchId}` intentionally no longer highlights any sidebar item;
+ * the `/posts` route remains accessible to deep links and bookmarks.
  */
 type NavItem = {
   label: string;
@@ -29,15 +31,14 @@ type NavItem = {
 
 export const DASHBOARD_NAV_ITEMS: readonly NavItem[] = [
   { label: "Create Posts", href: "/create", icon: Sparkles },
-  { label: "My Posts", href: "/posts", icon: FileText },
   { label: "Image Library", href: "/library", icon: ImageIcon },
-  { label: "Schedule", href: "/schedule", icon: Calendar },
+  { label: "Scheduled", href: "/schedule", icon: Calendar },
   { label: "Settings", href: "/settings", icon: Settings },
 ] as const;
 
 /**
  * True when the current pathname matches the nav item exactly, or is a nested
- * route underneath it (e.g. `/posts/abc/review` keeps `My Posts` highlighted).
+ * route underneath it (e.g. `/create/abc` keeps `Create Posts` highlighted).
  */
 function isActive(pathname: string, href: string): boolean {
   return pathname === href || pathname.startsWith(`${href}/`);

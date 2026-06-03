@@ -4,7 +4,11 @@ import { DashboardMobileNav } from "@/components/dashboard/mobile-nav";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
 import { DashboardTopBar } from "@/components/dashboard/top-bar";
 import { auth } from "@/lib/auth";
-import { profileService, subscriptionService } from "@/lib/services";
+import {
+  postService,
+  profileService,
+  subscriptionService,
+} from "@/lib/services";
 
 /**
  * Layout for the post-onboarding section of the app. Wraps `/dashboard`,
@@ -47,12 +51,25 @@ export default async function OnboardedLayout({
     session.user.id,
   );
 
+  // Trial-only `hasAnyBatch` lookup feeds `<DashboardTopBar />`'s pill
+  // (Scheduled redesign D-S12). Paid plans use rolling-window counters from
+  // the snapshot, so the DB hit is gated behind `plan === "free_trial"` to
+  // keep the layout render path free for Starter/Pro. Cheap indexed `select
+  // id limit 1` when it does fire.
+  const hasAnyBatch =
+    subscription.plan === "free_trial"
+      ? await postService.hasAnyBatch(session.user.id)
+      : false;
+
   return (
     <div className="flex flex-col md:flex-row min-h-[calc(100vh-4rem)]">
       <DashboardSidebar />
       <div className="flex-1 flex flex-col">
         <DashboardMobileNav />
-        <DashboardTopBar subscription={subscription} />
+        <DashboardTopBar
+          subscription={subscription}
+          hasAnyBatch={hasAnyBatch}
+        />
         <div className="flex-1 px-5 sm:px-8 lg:px-12 py-8 sm:py-12">
           {children}
         </div>
