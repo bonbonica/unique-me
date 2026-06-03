@@ -27,7 +27,7 @@ const fraunces = Fraunces({
 // Shared product description — kept in one constant so metadata, OG, Twitter,
 // and the JSON-LD payload never drift out of sync.
 const productDescription =
-  "AI social-media post generator and auto-poster for business owners. Tell us about your business, answer two weekly questions, and we'll create and schedule a week of posts to Facebook, Instagram, and LinkedIn.";
+  "AI social media post generator for small businesses. Answer two questions a week and UniqueMe writes, schedules, and posts content to your social accounts.";
 
 const productSocialTitle =
   "UniqueMe — AI social-media posts for your business";
