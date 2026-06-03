@@ -63,6 +63,13 @@ type PlanSectionProps = {
   daysLeftInTrial: number | null;
   nextResetAt: Date | null;
   platformOverage: { count: number } | null;
+  /**
+   * Phase 4 task-16 (D-A19): Pro-only monthly quota snapshot. Non-null only
+   * for active Pro plans; mirrors the same shape that
+   * `SubscriptionStateSnapshot.proQuota` exposes so the wiring in
+   * `settings/page.tsx` is mechanical.
+   */
+  proQuota: { used: number; max: 4; periodEndsAt: Date } | null;
 };
 
 /**
@@ -82,6 +89,7 @@ export function PlanSection({
   daysLeftInTrial,
   nextResetAt,
   platformOverage,
+  proQuota,
 }: PlanSectionProps) {
   // Trial users see the "Free · 7 days" framing per spec § 6.7; paid users
   // see the monthly price from the single-source pricing constants. The
@@ -97,8 +105,23 @@ export function PlanSection({
   // "Next batch" only makes sense for an active paid plan with a real reset
   // date. Trial users have no rolling window; cancelled / expired plans
   // aren't scheduled to generate anything.
+  //
+  // Phase 4 task-16: suppressed for Pro because the new Pro usage line below
+  // (`<ProQuotaSummary />`) already surfaces the same reset date alongside
+  // batches-used. Showing both for Pro reads redundantly. Starter keeps the
+  // original Phase 3 line unchanged.
   const showNextReset =
-    status === "active" && plan !== "free_trial" && nextResetAt !== null;
+    status === "active" &&
+    plan !== "free_trial" &&
+    plan !== "pro" &&
+    nextResetAt !== null;
+
+  // Phase 4 task-16: Pro-only "{used} of 4 batches used this period · Resets
+  // {date}" line. `proQuota` is non-null only for active Pro plans (per
+  // `SubscriptionStateSnapshot` semantics), so the explicit `plan === "pro"`
+  // check is belt-and-suspenders against a future caller that wires Starter
+  // or trial through this prop.
+  const showProQuota = plan === "pro" && proQuota !== null;
 
   return (
     <section className="bg-card rounded-2xl p-8 shadow-soft border border-border space-y-4">
@@ -130,6 +153,12 @@ export function PlanSection({
         // `nextResetAt` is non-null here per the `showNextReset` guard.
         // The non-null forwarding sidesteps an extra `!` in the JSX.
         <NextResetSummary at={nextResetAt} />
+      ) : null}
+
+      {showProQuota ? (
+        // `proQuota` is non-null here per the `showProQuota` guard. Same
+        // non-null forwarding idiom as `<NextResetSummary />` above.
+        <ProQuotaSummary quota={proQuota} />
       ) : null}
 
       {platformOverage ? (
@@ -203,4 +232,63 @@ function buildNextResetParts(at: Date): { weekday: string; days: number } {
     weekday: "long",
   }).format(at);
   return { weekday, days };
+}
+
+/**
+ * Phase 4 task-16: renders the Pro-only "{used} of 4 batches used this
+ * period · Resets {Weekday, Date}" line. Lives next to
+ * `<NextResetSummary />` so the two paid-plan lines share a single visual
+ * weight (`text-sm text-muted-foreground leading-7` per DESIGN.md).
+ *
+ * Same SSR-flash idiom as `<NextResetSummary />`: pre-hydration we render
+ * a stable fallback so the first SSR + CSR pass agree, then the real
+ * weekday + formatted date appear on the second client pass. This avoids
+ * the user's local timezone being computed against the UTC server.
+ *
+ * Singular/plural intentionally not collapsed — "1 of 4 batch used" reads
+ * awkwardly, so the spec (task-16 § Notes) standardises on the plural form
+ * across the board.
+ */
+function ProQuotaSummary({
+  quota,
+}: {
+  quota: { used: number; max: 4; periodEndsAt: Date };
+}) {
+  const mounted = useHasMounted();
+
+  if (!mounted) {
+    return (
+      <p className="text-sm text-muted-foreground leading-7">
+        {quota.used} of {quota.max} batches used this period.
+      </p>
+    );
+  }
+
+  return (
+    <p className="text-sm text-muted-foreground leading-7">
+      {quota.used} of {quota.max} batches used this period
+      {" · Resets "}
+      <ResetDate at={quota.periodEndsAt} />
+    </p>
+  );
+}
+
+/**
+ * Phase 4 task-16: client-side "Weekday, Month Day" formatter. Kept inline
+ * rather than imported from `<NextBatchBanner />` or `<QuotaGatedScreen />`
+ * because those files are being edited in parallel waves; sharing a
+ * helper would create a cross-task ordering hazard. If/when a shared
+ * date-format module lands, this can collapse into a single import.
+ *
+ * Uses the browser's locale via `Intl.DateTimeFormat(undefined, …)` so a
+ * user in Sydney sees their local weekday, not the UTC weekday the server
+ * would have computed.
+ */
+function ResetDate({ at }: { at: Date }) {
+  const formatted = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(at);
+  return <>{formatted}</>;
 }

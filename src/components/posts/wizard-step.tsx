@@ -18,8 +18,9 @@ import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
 /**
- * Per-network step. Renders 7 cards in this platform's preview format
- * and a state-driven bulk-schedule button above them.
+ * Per-network step. Renders one card per post in this platform's preview
+ * format (the batch's `totalPosts` — 7 for Free/Pro batches 1-3, 9 for Pro
+ * batch 4) and a state-driven bulk-schedule button above them.
  *
  * Selection state is owned by the parent {@link NetworkWizard} (see its
  * top-of-file rationale). This component is purely presentational — it
@@ -28,13 +29,15 @@ import type { BatchForReview } from "@/lib/services/post-service";
  * `onSelectAllForPlatform` / `onAdvance` callbacks for user actions.
  *
  * Bulk-button behavior (the user-spec for this step):
- *   - 0 selected   → label "Schedule all {Network} posts" → bulk-select
- *                    all 7 on the client (server catches up via
- *                    onSelectAllForPlatform) AND advance to the next step.
- *   - 1-6 selected → label "Schedule my pick" → just advance (current
- *                    selections persist).
- *   - 7 selected   → label "Schedule all {Network} posts" → just advance
- *                    (no select-all needed; everything is already in).
+ *   - 0 selected           → label "Schedule all {Network} posts" →
+ *                            bulk-select all N on the client (server
+ *                            catches up via onSelectAllForPlatform) AND
+ *                            advance to the next step.
+ *   - 1 .. N-1 selected    → label "Schedule my pick" → just advance
+ *                            (current selections persist).
+ *   - all N selected       → label "Schedule all {Network} posts" → just
+ *                            advance (no select-all needed; everything
+ *                            is already in).
  *
  * The button does NOT commit the batch. Committing happens once, on the
  * summary step. The wording on this button is intentionally aspirational
@@ -92,18 +95,21 @@ export function WizardStep({
     selectedCount === totalPosts && totalPosts > 0;
 
   /**
-   * Three-state bulk-action button driven by the live selection count:
+   * Three-state bulk-action button driven by the live selection count
+   * (N = `totalPosts`, the batch's `totalPosts` column — 7 or 9):
    *
-   *   - **0 selected** — label "Schedule all {N} posts". Click selects
-   *     all 7 + advances to the next step. Icon inherits button color.
-   *   - **1-6 selected** — label "{N} {Network} posts scheduled". Click
-   *     just advances. Icon inherits button color. Label updates live as
-   *     the user ticks individual checkboxes.
-   *   - **7 selected** — label "7 {Network} posts scheduled". Icon flips
-   *     to destructive (orange/coral) signalling "all in — click here to
-   *     undo." Click DESELECTS all 7 and does NOT advance. This is the
-   *     key behavioural difference from 1-6: at the all-in state, the
-   *     button reverses the bulk action instead of moving on.
+   *   - **0 selected** — label "Schedule all {Network} posts". Click
+   *     selects all N + advances to the next step. Icon inherits button
+   *     color.
+   *   - **1 .. N-1 selected** — label "{count} {Network} posts
+   *     scheduled". Click just advances. Icon inherits button color.
+   *     Label updates live as the user ticks individual checkboxes.
+   *   - **all N selected** — label "N {Network} posts scheduled". Icon
+   *     flips to destructive (orange/coral) signalling "all in — click
+   *     here to undo." Click DESELECTS all N and does NOT advance. This
+   *     is the key behavioural difference from the middle range: at the
+   *     all-in state, the button reverses the bulk action instead of
+   *     moving on.
    */
   let bulkLabel: string;
   if (selectedCount === 0) {
@@ -119,7 +125,7 @@ export function WizardStep({
     } else if (isAllSelected) {
       onDeselectAllForPlatform(platform);
       // No advance — the destructive-coloured icon signals "click to
-      // undo," and the user landing back at 0/7 here is the entire
+      // undo," and the user landing back at 0/N here is the entire
       // point of the action.
     } else {
       onAdvance();
@@ -166,6 +172,7 @@ export function WizardStep({
             post={post}
             platform={platform}
             batchCreatedAt={batchCreatedAt}
+            totalPosts={totalPosts}
             isSelected={selectedIds.includes(post.id)}
             onToggle={(next) => onSetSelection(post.id, platform, next)}
             mode={mode}
@@ -180,6 +187,7 @@ function PostCard({
   post,
   platform,
   batchCreatedAt,
+  totalPosts,
   isSelected,
   onToggle,
   mode,
@@ -187,6 +195,7 @@ function PostCard({
   post: PostWithExtras;
   platform: SelectionPlatform;
   batchCreatedAt: Date;
+  totalPosts: number;
   isSelected: boolean;
   onToggle: (next: boolean) => void;
   mode: "reviewing" | "cancelled";
@@ -201,7 +210,7 @@ function PostCard({
     <li className="bg-card rounded-2xl border border-border p-6 shadow-soft flex flex-col gap-4 card-interactive">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Post {post.postOrder} / 7
+          Post {post.postOrder} / {totalPosts}
         </span>
         <DayLabel
           postOrder={post.postOrder}

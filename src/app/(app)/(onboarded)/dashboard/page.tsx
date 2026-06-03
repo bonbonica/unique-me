@@ -1,6 +1,9 @@
 import { headers } from "next/headers";
 import Link from "next/link";
-import { NextBatchBanner } from "@/components/dashboard/next-batch-banner";
+import {
+  NextBatchBanner,
+  type NextBatchBannerProps,
+} from "@/components/dashboard/next-batch-banner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { auth } from "@/lib/auth";
@@ -8,27 +11,35 @@ import { postService, subscriptionService } from "@/lib/services";
 import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
 
 /**
- * Banner render decision (spec § 6.5). Returned as a tagged union rather
- * than a JSX element so the dashboard page stays trivially testable and
- * the visibility rules live in one named function. `null` means "don't
- * render" — trial users, first-time paid users, and the
- * overage/inactive gate reasons all share that branch.
+ * Banner render decision (spec § 6.5). Returned as the exact
+ * {@link NextBatchBannerProps} shape so the dashboard page just spreads it
+ * onto `<NextBatchBanner />` — no JSX-branching at the call site, and a
+ * missing variant trips the TypeScript exhaustiveness check.
+ *
+ * `null` means "don't render" — trial users, first-time paid users, and
+ * the overage/inactive gate reasons all share that branch.
  */
-type BannerDecision =
-  | { kind: "allowed" }
-  | { kind: "quota_active"; nextResetAt: Date }
-  | null;
+type BannerDecision = NextBatchBannerProps | null;
 
 /**
- * Spec § 6.5 visibility rules, in evaluation order:
+ * Spec § 6.5 / Phase 4 § 6.4 visibility rules, in evaluation order:
  *
  *   1. Trial users and the defensive `free_trial` plan check → null.
  *      Trial gets its own surfaces (trial strip, trial-gated screen).
- *   2. Otherwise call `canGenerate`:
+ *   2. Pro user with any in-period usage (`proQuota.used > 0`), regardless
+ *      of whether the gate is still open → Pro quota_active banner showing
+ *      "{used} of 4 batches used". This intentionally evaluates before the
+ *      `gate.allowed` allowed-banner branch so a Pro user mid-period sees
+ *      usage instead of the "Your 7 days are up" Starter copy.
+ *   3. Otherwise call `canGenerate`:
  *      - `allowed === true` AND has at least one prior batch → allowed
  *        banner with CTA. First-time paid users (allowed + no batch)
  *        land at the empty `/create` form, so the banner stays hidden.
- *      - `weekly_cap_active` → quota-active banner.
+ *      - `weekly_cap_active` → Starter quota-active banner.
+ *      - `monthly_cap_active` → Pro quota-active banner. Reached only when
+ *        `proQuota` is null (defensive — proQuota is non-null whenever the
+ *        Pro branch of canGenerate fires, but we read from gate as the
+ *        authoritative source).
  *      - `starter_platforms_overage` or `plan_inactive` → null. Those
  *        reasons surface on `/create` and `/settings` respectively.
  */
@@ -45,6 +56,24 @@ async function decideBanner(
 
   const gate = await subscriptionService.canGenerate(userId);
 
+  // Phase 4 § 6.4: a Pro user with any in-period usage sees the usage
+  // banner regardless of whether the gate is still open. `proQuota` is
+  // non-null only when `plan === "pro" && status === "active"`, so this
+  // branch also implicitly skips inactive/cancelled Pro rows (they fall
+  // through to the `gate.allowed` / `plan_inactive` paths below).
+  if (
+    subscription.plan === "pro" &&
+    subscription.proQuota &&
+    subscription.proQuota.used > 0
+  ) {
+    return {
+      state: "quota_active",
+      plan: "pro",
+      used: subscription.proQuota.used,
+      periodEndsAt: subscription.proQuota.periodEndsAt,
+    };
+  }
+
   if (gate.allowed) {
     // First-time paid users land at the empty /create form, not a
     // dashboard banner — so the banner only appears once they have at
@@ -53,11 +82,45 @@ async function decideBanner(
     if (!lastBatch) {
       return null;
     }
-    return { kind: "allowed" };
+    // Pro users with 0 usage fall here too (the proQuota.used > 0 branch
+    // above didn't match). They see the same "allowed" copy as Starter
+    // for Phase 4; the `pro_zero_used` sub-state lets a future copy
+    // tweak land without re-threading props. `free_trial` is unreachable
+    // because the trial branch returned early above, but the union
+    // covers it with `"trial"` for completeness.
+    const allowedPlan: Extract<
+      NextBatchBannerProps,
+      { state: "allowed" }
+    >["plan"] =
+      subscription.plan === "pro"
+        ? "pro_zero_used"
+        : subscription.plan === "starter"
+          ? "starter"
+          : "trial";
+    return { state: "allowed", plan: allowedPlan };
   }
 
   if (gate.reason === "weekly_cap_active") {
-    return { kind: "quota_active", nextResetAt: gate.nextResetAt };
+    return {
+      state: "quota_active",
+      plan: "starter",
+      nextResetAt: gate.nextResetAt,
+    };
+  }
+
+  if (gate.reason === "monthly_cap_active") {
+    // Defensive: a Pro user at-cap should have already matched the
+    // `proQuota.used > 0` branch above (used === 4). This fallback covers
+    // a transient state where `canGenerate` and the snapshot disagree —
+    // e.g. proQuota became null between reads. We synthesize a
+    // proQuota-shaped payload from the gate reason so the banner still
+    // renders the correct copy without re-querying.
+    return {
+      state: "quota_active",
+      plan: "pro",
+      used: gate.batchesUsed,
+      periodEndsAt: gate.nextResetAt,
+    };
   }
 
   // overage / inactive / trial_batch_exists (unreachable for non-trial)
@@ -142,14 +205,7 @@ export default async function DashboardPage() {
     <div className="max-w-5xl">
       {banner ? (
         <div className="mb-8 sm:mb-12">
-          {banner.kind === "allowed" ? (
-            <NextBatchBanner state="allowed" nextResetAt={null} />
-          ) : (
-            <NextBatchBanner
-              state="quota_active"
-              nextResetAt={banner.nextResetAt}
-            />
-          )}
+          <NextBatchBanner {...banner} />
         </div>
       ) : null}
 

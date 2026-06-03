@@ -40,16 +40,35 @@ export function DashboardTopBar({
       ) : null}
 
       {/*
-        Paid weekly-cap countdown. Mutually exclusive with the trial strip
-        above: `status === "trial"` and `status === "active"` can't both be
-        true, so at most one of these two pills ever renders. The pill is
-        also gated on `nextResetAt !== null` — that covers paid users with
-        no prior batch and cancelled/expired plans, both of which should
-        show only the plan pill itself.
+        Paid countdown pill. Mutually exclusive with the trial strip above:
+        `status === "trial"` and `status === "active"` can't both be true, so
+        at most one of these two pills ever renders. Pro takes precedence
+        over Starter because an active Pro row always carries a non-null
+        `proQuota` (task-06 D-A19), and Pro's pill copy ("{N} batches left" /
+        "Resets in Nd") is the canonical surface for the rolling-30-day cap.
+
+        Starter falls through to the Phase 3 weekly-cap rendering — gated on
+        `nextResetAt !== null` to skip paid Starter users with no prior batch
+        (under-cap reports `{ at: null, reason: "no_batch_yet" }`). Trial and
+        cancelled/expired plans render only the plan pill itself.
       */}
       {subscription.status === "active" &&
-      subscription.nextResetAt !== null ? (
-        <QuotaCountdownPill nextResetAt={subscription.nextResetAt} />
+      subscription.plan === "pro" &&
+      subscription.proQuota !== null ? (
+        <QuotaCountdownPill
+          variant="pro"
+          batchesRemaining={
+            subscription.proQuota.max - subscription.proQuota.used
+          }
+          periodEndsAt={subscription.proQuota.periodEndsAt}
+        />
+      ) : subscription.status === "active" &&
+        subscription.plan === "starter" &&
+        subscription.nextResetAt !== null ? (
+        <QuotaCountdownPill
+          variant="starter"
+          nextResetAt={subscription.nextResetAt}
+        />
       ) : null}
     </div>
   );

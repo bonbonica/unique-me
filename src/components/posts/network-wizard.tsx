@@ -24,9 +24,10 @@ import type { BatchForReview } from "@/lib/services/post-service";
  *      moment a checkbox is clicked.
  *   2. `<WizardSummary />` needs to reflect mid-wizard edits without a
  *      page refresh — same reason.
- *   3. Bulk actions ("Schedule all FB posts") have to flip 7 cards at
- *      once. Local per-card state can't coordinate that without prop
- *      drilling callbacks anyway, so lifting once is cleaner.
+ *   3. Bulk actions ("Schedule all FB posts") have to flip every card in
+ *      the batch (7 or 9, depending on `batch.totalPosts`) at once.
+ *      Local per-card state can't coordinate that without prop drilling
+ *      callbacks anyway, so lifting once is cleaner.
  *
  * Server writes happen via {@link selectForNetworkAction} /
  * {@link deselectForNetworkAction} inside a transition — the UI
@@ -137,9 +138,9 @@ export function NetworkWizard({
     const allPostIds = data.posts.map((p) => p.id);
     setSelections((prev) => ({ ...prev, [platform]: allPostIds }));
     startTransition(async () => {
-      // Parallel writes for all 7 posts. Each call is independently
-      // idempotent (ON CONFLICT DO NOTHING in the service layer) so
-      // re-running on top of existing selections is safe.
+      // Parallel writes for every post in the batch. Each call is
+      // independently idempotent (ON CONFLICT DO NOTHING in the service
+      // layer) so re-running on top of existing selections is safe.
       await Promise.all(
         allPostIds.map((id) => selectForNetworkAction(id, platform))
       );

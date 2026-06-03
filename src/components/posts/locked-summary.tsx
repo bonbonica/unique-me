@@ -54,8 +54,9 @@ import type { BatchForReview } from "@/lib/services/post-service";
  * "Day N" terminology in the scheduled-for slot encodes the rolling 7-day
  * scheduling-window design (item 5 in the post-Wave-5 polish brief):
  *
- *  - The database stores universal day labels via `posts.postOrder` (1-7).
- *    No date is committed at batch-creation time.
+ *  - The database stores universal day labels via `posts.postOrder`
+ *    (1..`batch.totalPosts` — 7 for Free/Pro batches 1-3, 9 for Pro
+ *    batch 4). No date is committed at batch-creation time.
  *  - Phase 4's cron + scheduling layer will assign a `scheduledTime` per
  *    post. Day 1 is anchored to the day the first post actually publishes
  *    in the user's local timezone — NOT the day the batch was generated.
@@ -159,6 +160,7 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
               key={`${item.post.id}:${item.platform}`}
               item={item}
               batchCreatedAt={data.batch.createdAt}
+              totalPosts={data.batch.totalPosts}
             />
           ))}
         </ul>
@@ -193,9 +195,11 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
 function LockedCard({
   item,
   batchCreatedAt,
+  totalPosts,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
+  totalPosts: number;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -206,7 +210,7 @@ function LockedCard({
     <li className="bg-card rounded-2xl border border-border p-6 shadow-soft flex flex-col gap-4 opacity-90">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Post {post.postOrder} / 7
+          Post {post.postOrder} / {totalPosts}
         </span>
         <NetworkBadge platform={platform} />
       </div>

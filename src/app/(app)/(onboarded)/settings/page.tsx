@@ -52,6 +52,7 @@ export default async function SettingsPage() {
         daysLeftInTrial={subscription.daysLeftInTrial}
         nextResetAt={subscription.nextResetAt}
         platformOverage={platformOverage}
+        proQuota={subscription.proQuota}
       />
     </div>
   );

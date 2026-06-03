@@ -180,6 +180,7 @@ export function WizardSummary({
                 key={`${item.post.id}:${item.platform}`}
                 item={item}
                 batchCreatedAt={batch.createdAt}
+                totalPosts={batch.totalPosts}
                 onRemove={() => handleRemove(item)}
               />
             ))}
@@ -241,10 +242,12 @@ function ScheduleButton({
 function SummaryCard({
   item,
   batchCreatedAt,
+  totalPosts,
   onRemove,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
+  totalPosts: number;
   onRemove: () => void;
 }) {
   const { post, platform } = item;
@@ -256,7 +259,7 @@ function SummaryCard({
     <li className="bg-card rounded-2xl border border-border p-6 shadow-soft flex flex-col gap-4 card-interactive">
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
-          Post {post.postOrder} / 7
+          Post {post.postOrder} / {totalPosts}
         </span>
         <DayLabel
           postOrder={post.postOrder}

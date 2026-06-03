@@ -27,11 +27,20 @@ import { Button } from "@/components/ui/button";
 export function QuotaGatedScreen(
   props:
     | { variant: "quota"; nextResetAt: Date }
+    | { variant: "monthly_quota"; nextResetAt: Date; batchesUsed: number }
     | { variant: "overage"; currentCount: number }
     | { variant: "inactive" },
 ) {
   if (props.variant === "quota") {
     return <QuotaVariant nextResetAt={props.nextResetAt} />;
+  }
+
+  if (props.variant === "monthly_quota") {
+    // `batchesUsed` is part of the contract (and tested) but deliberately
+    // not rendered in copy — "all 4 batches" already conveys the count
+    // (task 13 § 4). The prop stays in the union so a future under-cap
+    // warning variant can reuse the shape.
+    return <MonthlyQuotaVariant nextResetAt={props.nextResetAt} />;
   }
 
   if (props.variant === "overage") {
@@ -144,4 +153,62 @@ function buildQuotaHeadline(nextResetAt: Date): string {
   return `Your next batch unlocks in ${daysRemaining} ${
     daysRemaining === 1 ? "day" : "days"
   }, on ${weekday}.`;
+}
+
+/**
+ * Monthly-quota variant: Pro user has used all 4 batches in the current
+ * 30-day period. Same outer surface as `QuotaVariant` (same wrapper, same
+ * Fraunces headline, same champagne CTA) — different facts. The headline
+ * is static (no client-only data), so it renders identically on server
+ * and first client pass. Only the body's reset date + day count are
+ * gated behind the mount sentinel for timezone correctness.
+ *
+ * `batchesUsed` is intentionally not a prop here — `QuotaGatedScreen`
+ * accepts and validates it at the union boundary, but the rendered copy
+ * doesn't surface the number (see § 4 of task 13).
+ */
+function MonthlyQuotaVariant({ nextResetAt }: { nextResetAt: Date }) {
+  const mounted = useHasMounted();
+
+  const resetCopy = mounted
+    ? buildMonthlyResetCopy(nextResetAt)
+    : "Your monthly cycle resets soon.";
+
+  return (
+    <div className="max-w-md mx-auto text-center mt-16 space-y-6">
+      <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+        You&apos;ve used all 4 batches this period.
+      </h1>
+      <p className="text-base text-muted-foreground leading-7">{resetCopy}</p>
+      <div className="flex flex-col gap-3">
+        <Button asChild size="lg" className="rounded-full glow-champagne">
+          <Link href="/posts">Return to your current batch →</Link>
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Module-scope helper that mirrors `buildQuotaHeadline`'s shape:
+ * impure reads (`Date.now`, `Intl`) live outside the component body and
+ * the caller gates execution behind the mount sentinel.
+ *
+ * Returns a single sentence combining the reset weekday + a short date
+ * (e.g. "Monday, June 15") with the days-remaining tail. Reuses the same
+ * `Math.max(1, Math.ceil(...))` day-count math as `buildQuotaHeadline`
+ * so "less than 24 hours left" still reads as "1 day" and the two
+ * variants speak the same dialect.
+ */
+function buildMonthlyResetCopy(nextResetAt: Date): string {
+  const msUntilReset = nextResetAt.getTime() - Date.now();
+  const daysRemaining = Math.max(1, Math.ceil(msUntilReset / 86_400_000));
+  const formattedDate = new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  }).format(nextResetAt);
+  return `Your monthly cycle resets on ${formattedDate} — in ${daysRemaining} ${
+    daysRemaining === 1 ? "day" : "days"
+  }.`;
 }
