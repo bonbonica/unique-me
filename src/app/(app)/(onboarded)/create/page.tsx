@@ -1,8 +1,13 @@
 import { headers } from "next/headers";
-import { GenerateForm } from "@/components/create/generate-form";
+import {
+  CreateHubFormProvider,
+  CreateHubFormSlot,
+  CreateHubStartNewBatchButton,
+} from "@/components/create/create-hub-form-slot";
 import { QuotaGatedScreen } from "@/components/create/quota-gated-screen";
 import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
 import { TrialNote } from "@/components/create/trial-note";
+import { UnscheduledBatchList } from "@/components/create/unscheduled-batch-list";
 import { auth } from "@/lib/auth";
 import { type Profile } from "@/lib/schema";
 import {
@@ -12,32 +17,52 @@ import {
 } from "@/lib/services";
 
 /**
- * `/create` page (Phase 2 task-07). Two render paths driven by subscription
- * status + existing-batch state:
+ * `/create` — the **Create Posts hub** (spec § 6.9, D-S2 / D-S14).
  *
- *  1. **Gated** — trial user who already has any batch (D20). Renders the
- *     `<TrialGatedScreen />`, hides the form. Cancelling a trial batch
- *     doesn't reset the cap, so a user with one cancelled batch still
- *     lands here.
- *  2. **Form** — everyone else (trial users with no batch, non-trial
- *     users). Renders the explainer + optional trial note + 2-field
- *     generate form, with placeholders tailored to the user's profile
- *     (item 3 in the polish brief).
+ * Hub structure (one container, three vertical slots):
+ *
+ *   1. Header — `"Create Posts"` (Fraunces) + optional `<TrialNote />`.
+ *   2. `<UnscheduledBatchList />` — top buttons + stacked cards for any
+ *      batches in `reviewing` / `cancelled`. Self-hides when there are
+ *      zero cards AND no `startNewBatchSlot` injected.
+ *   3. `belowSlot` — the form OR a gated screen, depending on subscription
+ *      state.
+ *
+ * The collapse rule (D-S14): when 1+ cards exist + the user can generate,
+ * the form starts collapsed and the top `[Start new batch]` button toggles
+ * it. When zero cards exist + the user can generate, the form is expanded
+ * by default so fresh-state users see it immediately. Gate screens take
+ * the form's slot exactly as before.
+ *
+ * All five `canGenerate` reason codes (`trial_batch_exists`,
+ * `weekly_cap_active`, `monthly_cap_active`, `starter_platforms_overage`,
+ * `plan_inactive`) are preserved. None of them are new in this redesign —
+ * the hub is a render-time concern (spec D-S17).
  *
  * Placeholder personalisation reads the profile's `websiteAnalysis` blob
- * (populated during onboarding) for `suggestedTopics` / `uniqueSellingPoints`.
- * Users who completed onboarding without a website (or whose scrape failed)
- * fall through to a businessType-aware default set. No AI call here —
- * everything's derived synchronously from data we already have on the
- * profile row.
+ * (populated during onboarding) for `suggestedTopics` /
+ * `uniqueSellingPoints`. Users who completed onboarding without a website
+ * (or whose scrape failed) fall through to a businessType-aware default
+ * set. No AI call here — everything's derived synchronously from data we
+ * already have on the profile row.
  */
 export default async function CreatePage() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) return null;
 
   const subscription = await subscriptionService.checkSubscription(
-    session.user.id
+    session.user.id,
   );
+  const cards = await postService.getUnscheduledBatchesForUser(session.user.id);
+
+  // The three locals the final return composes. `belowSlot` is the
+  // form-OR-gated-screen rendered under the cards; `canStartNew` controls
+  // whether the top "Start new batch" affordance is interactive (and
+  // whether we even inject a custom button slot at all); `capacityTooltip`
+  // is the disabled-button title text on the at-cap paths.
+  let belowSlot: React.ReactNode;
+  let canStartNew = false;
+  let capacityTooltip: string | undefined;
 
   // Gate (D20): trial + any batch (incl. cancelled) → upgrade screen.
   // We use getMostRecentBatch (any status) rather than the previous
@@ -48,12 +73,13 @@ export default async function CreatePage() {
   if (subscription.status === "trial") {
     const mostRecent = await postService.getMostRecentBatch(session.user.id);
     if (mostRecent) {
-      return (
+      belowSlot = (
         <TrialGatedScreen
           existingBatchId={mostRecent.id}
           batchStatus={mostRecent.status}
         />
       );
+      capacityTooltip = "Trial includes one batch.";
     }
   }
 
@@ -64,65 +90,94 @@ export default async function CreatePage() {
   // `trial_batch_exists` is unreachable in this position but kept in the
   // switch for exhaustiveness so a future canGenerate change can't
   // silently fall through.
-  const gate = await subscriptionService.canGenerate(session.user.id);
-  if (!gate.allowed) {
-    switch (gate.reason) {
-      case "weekly_cap_active":
-        return (
-          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
-        );
-      case "monthly_cap_active":
-        // Temporary: reuses the weekly_cap_active "quota" variant so the
-        // wave compiles. Task 13 (Wave 4) introduces a dedicated
-        // `variant="monthly_quota"` with the 4-of-4-batches copy + the
-        // `batchesUsed` field; swap this arm there.
-        return (
-          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
-        );
-      case "starter_platforms_overage":
-        return (
-          <QuotaGatedScreen
-            variant="overage"
-            currentCount={gate.currentCount}
-          />
-        );
-      case "plan_inactive":
-        return <QuotaGatedScreen variant="inactive" />;
-      case "trial_batch_exists":
-        // Unreachable — the explicit trial branch above already returns.
-        return null;
+  if (!belowSlot) {
+    const gate = await subscriptionService.canGenerate(session.user.id);
+    if (!gate.allowed) {
+      switch (gate.reason) {
+        case "weekly_cap_active":
+          belowSlot = (
+            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+          );
+          capacityTooltip = "You've used all batches this period.";
+          break;
+        case "monthly_cap_active":
+          // Temporary: reuses the weekly_cap_active "quota" variant so the
+          // wave compiles. Task 13 (Wave 4) introduces a dedicated
+          // `variant="monthly_quota"` with the 4-of-4-batches copy + the
+          // `batchesUsed` field; swap this arm there.
+          belowSlot = (
+            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+          );
+          capacityTooltip = "You've used all batches this period.";
+          break;
+        case "starter_platforms_overage":
+          belowSlot = (
+            <QuotaGatedScreen
+              variant="overage"
+              currentCount={gate.currentCount}
+            />
+          );
+          capacityTooltip = "Reduce your platforms in Settings to continue.";
+          break;
+        case "plan_inactive":
+          belowSlot = <QuotaGatedScreen variant="inactive" />;
+          capacityTooltip = "Your plan is inactive.";
+          break;
+        case "trial_batch_exists":
+          // Unreachable — the explicit trial branch above already set
+          // belowSlot. Kept in the switch for exhaustiveness so a future
+          // canGenerate change can't silently fall through.
+          break;
+      }
+    } else {
+      canStartNew = true;
+      const profile = await profileService.getProfile(session.user.id);
+      const themePlaceholder = computeThemePlaceholder(profile);
+      const importantThingPlaceholder =
+        computeImportantThingPlaceholder(profile);
+      belowSlot = (
+        <CreateHubFormSlot
+          themePlaceholder={themePlaceholder}
+          importantThingPlaceholder={importantThingPlaceholder}
+          plan={subscription.plan}
+        />
+      );
     }
   }
-
-  const profile = await profileService.getProfile(session.user.id);
-  const themePlaceholder = computeThemePlaceholder(profile);
-  const importantThingPlaceholder = computeImportantThingPlaceholder(profile);
 
   const daysLeft = subscription.daysLeftInTrial;
   const showTrialNote =
     subscription.status === "trial" && daysLeft !== null && daysLeft > 0;
 
-  return (
-    <div className="max-w-2xl mx-auto">
-      <header className="space-y-3">
-        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-          Create this week&apos;s posts
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          We&apos;ll write 7 posts for Facebook this week. Pro users also get
-          matching Instagram and LinkedIn versions of each.
-        </p>
-        {showTrialNote ? <TrialNote daysLeft={daysLeft} /> : null}
-      </header>
+  // Collapse rule (D-S14):
+  //   - 1+ cards + form allowed → form starts collapsed; top button opens it.
+  //   - 0 cards + form allowed → form starts expanded; no top button.
+  // Gated paths don't render the form at all, so this flag is irrelevant
+  // for them.
+  const initiallyExpanded = canStartNew && cards.length === 0;
 
-      <div className="mt-10">
-        <GenerateForm
-          themePlaceholder={themePlaceholder}
-          importantThingPlaceholder={importantThingPlaceholder}
-          plan={subscription.plan}
+  return (
+    <CreateHubFormProvider initiallyExpanded={initiallyExpanded}>
+      <div className="max-w-3xl mx-auto space-y-12">
+        <header className="space-y-3">
+          <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+            Create Posts
+          </h1>
+          {showTrialNote ? <TrialNote daysLeft={daysLeft} /> : null}
+        </header>
+
+        <UnscheduledBatchList
+          cards={cards}
+          hasCapacity={canStartNew}
+          {...(capacityTooltip !== undefined ? { capacityTooltip } : {})}
+          {...(canStartNew && cards.length > 0
+            ? { startNewBatchSlot: <CreateHubStartNewBatchButton /> }
+            : {})}
         />
+
+        {belowSlot}
       </div>
-    </div>
+    </CreateHubFormProvider>
   );
 }
 
