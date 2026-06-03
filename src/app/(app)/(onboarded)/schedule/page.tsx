@@ -1,22 +1,33 @@
-import { Sparkles } from "lucide-react";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { ScheduledPageClient } from "@/components/schedule/scheduled-page-client";
+import { auth } from "@/lib/auth";
+import { postService } from "@/lib/services";
 
 /**
- * Phase 4 ships the Schedule page (weekly calendar + auto-schedule logic).
- * Placeholder for Phase 1.
+ * Scheduled hub (Stage-1 redesign). Server component — owns auth + data
+ * fetching. Renders the page header and hands the `ScheduledView` to a
+ * client wrapper that manages the cancel-dialog state.
+ *
+ * Layout follows DESIGN.md §8 pattern B (editorial content): `max-w-3xl`,
+ * generous `space-y-12` between sections. The top quota pill + sidebar are
+ * provided by the `(onboarded)` layout and are not duplicated here.
  */
-export default function SchedulePage() {
+export default async function SchedulePage() {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
+  const view = await postService.getScheduledViewForUser(session.user.id);
+
   return (
-    <div className="max-w-2xl space-y-4">
-      <div className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 text-primary border border-primary/30 px-3 py-1 text-xs font-medium tracking-wider uppercase">
-        <Sparkles className="size-3" />
-        Coming soon
-      </div>
-      <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-        Schedule
-      </h1>
-      <p className="text-lg text-muted-foreground leading-8">
-        Your weekly calendar of scheduled posts.
-      </p>
+    <div className="max-w-3xl mx-auto space-y-12">
+      <header>
+        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+          Scheduled
+        </h1>
+      </header>
+
+      <ScheduledPageClient view={view} />
     </div>
   );
 }
