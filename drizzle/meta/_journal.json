@@ -50,6 +50,13 @@
       "when": 1780354657041,
       "tag": "0006_previous_iron_fist",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780606656411,
+      "tag": "0007_shiny_valkyrie",
+      "breakpoints": true
     }
   ]
 }

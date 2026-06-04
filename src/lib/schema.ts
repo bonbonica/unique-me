@@ -329,6 +329,51 @@ export const postImages = pgTable(
   ]
 );
 
+/**
+ * Stage-2 D-S2-4. One row per image the user has chosen to retain after the
+ * originating post was hard-deleted (per-post cancel, delete-batch-forever,
+ * rolling-4 eviction overflow). Cap = 30 per user, enforced by image-service
+ * via per-user pg_advisory_xact_lock + oldest-by-createdAt eviction.
+ *
+ * Deliberately has NO FK to `posts` — by the time we insert here, the
+ * originating post row has already been deleted by the caller. `originPostId`
+ * and `originBatchId` are audit-only text fields, NOT references.
+ *
+ * Blob lifecycle: when this row exists, `library_images.imageUrl` OWNS the
+ * Vercel Blob URL. Deleting this row MUST go through `image-service.ts` so
+ * the blob `del()` fires first.
+ */
+export const libraryImages = pgTable(
+  "library_images",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    // Cascade: deleting a user removes their library.
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    imageUrl: text("image_url").notNull(),
+    imagePrompt: text("image_prompt").notNull(),
+    // Union: "ai" | "uploaded". NOT "library" — this table IS the library, so
+    // "library" as a source value here would be self-referential nonsense.
+    source: text("source").notNull(),
+    // Audit-only. No FK — see docblock above.
+    originPostId: text("origin_post_id"),
+    originBatchId: text("origin_batch_id"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    // Composite index on (userId, createdAt). Supports:
+    //  - listLibrary: WHERE userId = ? ORDER BY createdAt DESC
+    //  - eviction:   WHERE userId = ? ORDER BY createdAt ASC LIMIT N
+    index("library_images_user_created_idx").on(
+      table.userId,
+      table.createdAt,
+    ),
+  ]
+);
+
 export const subscriptions = pgTable(
   "subscriptions",
   {
@@ -482,6 +527,9 @@ export type NewPost = typeof posts.$inferInsert;
 
 export type PostImage = typeof postImages.$inferSelect;
 export type NewPostImage = typeof postImages.$inferInsert;
+
+export type LibraryImage = typeof libraryImages.$inferSelect;
+export type NewLibraryImage = typeof libraryImages.$inferInsert;
 
 export type PostVariation = typeof postVariations.$inferSelect;
 export type NewPostVariation = typeof postVariations.$inferInsert;

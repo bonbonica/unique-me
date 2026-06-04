@@ -6,8 +6,14 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ScheduledView } from "@/lib/services/post-service";
 import { CancelBatchDialog } from "./cancel-batch-dialog";
-import { PastBatchesList } from "./past-batches-list";
 import { ScheduledBatchBox } from "./scheduled-batch-box";
+
+// TODO(task-11): Stage-2 task-11 rewrites this client into the 2x2 grid plus
+// the `<CreateNextBatchCta />` above it. The wrapper below is the minimum
+// patch needed to keep Wave-1 typecheck green after task-02 dropped
+// `view.past` / `periodStartDate` / `periodEndsAt` from `ScheduledView` and
+// killed the `<PastBatchesList />` surface (per spec §5.3 — kill dead
+// surface). Re-evaluate the cancel-dialog wiring during task-11.
 
 type Props = { view: ScheduledView };
 
@@ -22,17 +28,17 @@ type CancelTarget = {
  * Client wrapper that owns the cancel-dialog state for the Scheduled page.
  *
  * The page itself stays a server component (data fetching, header). This
- * wrapper renders the boxes, the Past Batches disclosure, and the single
- * `<CancelBatchDialog />` instance whose target is swapped via `cancelTarget`
- * state — one dialog mount for any number of boxes.
+ * wrapper renders the boxes and the single `<CancelBatchDialog />` instance
+ * whose target is swapped via `cancelTarget` state — one dialog mount for
+ * any number of boxes.
  *
- * Empty state collapses both sections into a single CTA when there are zero
- * current and zero past batches.
+ * Empty state collapses into a single CTA when there are zero current
+ * batches.
  */
 export function ScheduledPageClient({ view }: Props) {
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
 
-  const isEmpty = view.current.length === 0 && view.past.length === 0;
+  const isEmpty = view.current.length === 0;
 
   if (isEmpty) {
     return (
@@ -56,27 +62,21 @@ export function ScheduledPageClient({ view }: Props) {
 
   return (
     <>
-      {view.current.length > 0 && (
-        <section className="space-y-6" aria-label="Current period batches">
-          {view.current.map((batch) => (
-            <ScheduledBatchBox
-              key={batch.id}
-              data={batch}
-              onCancelClick={() =>
-                setCancelTarget({
-                  id: batch.id,
-                  totalPosts: batch.totalPosts,
-                  alreadyPostedCount: batch.alreadyPostedCount,
-                  queuedCount: batch.queuedCount,
-                })
-              }
-            />
-          ))}
-        </section>
-      )}
-
-      <section aria-label="Past batches">
-        <PastBatchesList rows={view.past} />
+      <section className="space-y-6" aria-label="Current period batches">
+        {view.current.map((batch) => (
+          <ScheduledBatchBox
+            key={batch.id}
+            data={batch}
+            onCancelClick={() =>
+              setCancelTarget({
+                id: batch.id,
+                totalPosts: batch.totalPosts,
+                alreadyPostedCount: batch.alreadyPostedCount,
+                queuedCount: batch.queuedCount,
+              })
+            }
+          />
+        ))}
       </section>
 
       {cancelTarget && (
