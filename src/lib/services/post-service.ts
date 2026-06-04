@@ -16,6 +16,7 @@ import {
   scheduledPosts,
   weeklyBatches,
 } from "@/lib/schema";
+import * as imageService from "./image-service";
 import * as profileService from "./profile-service";
 import * as subscriptionService from "./subscription-service";
 
@@ -115,6 +116,13 @@ export type StopResult =
   | {
       ok: false;
       error: "not_found" | "not_owned" | "not_scheduling" | "db_failed";
+    };
+
+export type CancelPostResult =
+  | { ok: true; batchId: string }
+  | {
+      ok: false;
+      error: "not_found" | "not_owned" | "already_posted" | "db_failed";
     };
 
 export type BatchForReview = {
@@ -1313,6 +1321,207 @@ export async function stopBatch(
     return { ok: true, batchId };
   } catch (err) {
     console.error("[postService.stopBatch]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+/**
+ * Hard-delete one post with image preservation (Stage-2 D-S2-6, D-S2-7).
+ *
+ * Order is invariant:
+ *   1. Read post (ownership gate).
+ *   2. Read scheduled_posts rows (availability gate).
+ *   3. Preserve images to library (image-service handles ordering + lock).
+ *   4. DELETE posts row (cascade cleans post_images, post_variations,
+ *      post_selections, scheduled_posts).
+ *
+ * The image blob stays alive — `library_images.imageUrl` now owns it. The
+ * `post_images` row vanishes via cascade, but the URL was already copied into
+ * the library before the cascade fired.
+ *
+ * Availability gate (D-S2-7) rejects with `already_posted` when:
+ *  - the post has zero `scheduled_posts` rows (never scheduled), OR
+ *  - any `scheduled_posts` row has `status='posted'`, OR
+ *  - all `scheduled_posts` rows have `scheduledTime <= now()` (nothing future
+ *    to cancel).
+ *
+ * The `.some()` checks happen JS-side so we don't need `or` from drizzle.
+ */
+export async function cancelPost(
+  sessionUserId: string,
+  postId: string
+): Promise<CancelPostResult> {
+  // 1. Ownership gate.
+  const [post] = await db
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+    })
+    .from(posts)
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!post) return { ok: false, error: "not_found" };
+  if (post.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // 2. Availability gate (D-S2-7): at least one future-scheduled row AND no
+  // posted row. Zero rows is also treated as `already_posted` — the UI only
+  // surfaces the cancel action for scheduled posts, so this is a defensive
+  // fallback rather than a user-reachable path.
+  const scheduleRows = await db
+    .select({
+      status: scheduledPosts.status,
+      scheduledTime: scheduledPosts.scheduledTime,
+    })
+    .from(scheduledPosts)
+    .where(eq(scheduledPosts.postId, postId));
+
+  const now = Date.now();
+  const anyPosted = scheduleRows.some((r) => r.status === "posted");
+  const anyFuture = scheduleRows.some(
+    (r) => r.scheduledTime.getTime() > now
+  );
+
+  if (scheduleRows.length === 0 || anyPosted || !anyFuture) {
+    return { ok: false, error: "already_posted" };
+  }
+
+  // 3. Preserve images. image-service enforces ownership again as defense in
+  // depth and handles the per-user advisory lock for the 30-image cap.
+  const retain = await imageService.retainImagesToLibrary(sessionUserId, [
+    postId,
+  ]);
+  if (!retain.ok) {
+    // `not_owned` here would indicate a race we already screened for — bubble
+    // up the same error code for the UI toast.
+    return { ok: false, error: retain.error };
+  }
+
+  // 4. Hard-delete. Cascade fires. The `userId = sessionUserId` clause is
+  // defense in depth against a TOCTOU race between the ownership read above
+  // and this DELETE.
+  try {
+    const result = await db
+      .delete(posts)
+      .where(and(eq(posts.id, postId), eq(posts.userId, sessionUserId)))
+      .returning({ id: posts.id });
+
+    if (result.length === 0) {
+      // Lost a race — another request deleted the post between our ownership
+      // read and our DELETE. Idempotent outcome: nothing to do.
+      return { ok: false, error: "not_found" };
+    }
+
+    return { ok: true, batchId: post.batchId };
+  } catch (err) {
+    console.error("[postService.cancelPost]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+// =============================================================================
+// deleteBatchForever — hard-delete a cancelled batch with image preservation
+// (D-S2-8). Companion to cancelPost: same retain-then-delete order, applied at
+// the batch level. Reviewing batches use the wizard discard flow, not this.
+// =============================================================================
+
+export type DeleteBatchForeverResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: "not_found" | "not_owned" | "not_cancelled" | "db_failed";
+    };
+
+/**
+ * Hard-delete a cancelled batch with image preservation (D-S2-8).
+ *
+ * Mirrors {@link cancelPost}'s order:
+ *   1. Read batch (ownership + status gate).
+ *   2. Read postIds for the batch (could be 0 if every post was cancelled
+ *      individually first).
+ *   3. Preserve images via image-service (per-user advisory lock and the
+ *      30-image cap eviction live there — this function is agnostic).
+ *   4. DELETE weekly_batches row. Cascade cleans posts → post_images →
+ *      post_variations → post_selections → scheduled_posts in that order, so
+ *      by the time post_images rows are removed, their URLs are already owned
+ *      by library_images and the blobs stay referenced.
+ *
+ * Only `status = 'cancelled'` batches qualify here. Reviewing batches go
+ * through the wizard discard flow, which has its own confirmation copy.
+ */
+export async function deleteBatchForever(
+  sessionUserId: string,
+  batchId: string
+): Promise<DeleteBatchForeverResult> {
+  // 1. Ownership + status gate.
+  const [batch] = await db
+    .select({
+      userId: weeklyBatches.userId,
+      status: weeklyBatches.status,
+    })
+    .from(weeklyBatches)
+    .where(eq(weeklyBatches.id, batchId))
+    .limit(1);
+
+  if (!batch) return { ok: false, error: "not_found" };
+  if (batch.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+  if (batch.status !== "cancelled") {
+    return { ok: false, error: "not_cancelled" };
+  }
+
+  // 2. Collect post IDs. Legitimately empty when the user cancelled every
+  // post individually before clicking "Delete forever" on the batch card.
+  const postRows = await db
+    .select({ id: posts.id })
+    .from(posts)
+    .where(eq(posts.batchId, batchId));
+
+  const postIds = postRows.map((r) => r.id);
+
+  // 3. Preserve images. Skip the call entirely on empty input — image-service
+  // would short-circuit anyway, but avoiding the round-trip keeps the empty
+  // path cheap.
+  if (postIds.length > 0) {
+    const retain = await imageService.retainImagesToLibrary(
+      sessionUserId,
+      postIds
+    );
+    if (!retain.ok) {
+      // `not_owned` here would mean a row's userId drifted between our batch
+      // read and image-service's per-post check — surface the same code for
+      // the UI toast.
+      return { ok: false, error: retain.error };
+    }
+  }
+
+  // 4. Hard-delete. The `userId = sessionUserId AND status = 'cancelled'`
+  // clause is defense in depth against a TOCTOU window between the read in
+  // step 1 and this DELETE (e.g., another tab reopened the batch).
+  try {
+    const result = await db
+      .delete(weeklyBatches)
+      .where(
+        and(
+          eq(weeklyBatches.id, batchId),
+          eq(weeklyBatches.userId, sessionUserId),
+          eq(weeklyBatches.status, "cancelled")
+        )
+      )
+      .returning({ id: weeklyBatches.id });
+
+    if (result.length === 0) {
+      // Lost a race — batch status flipped or row vanished between our read
+      // and our DELETE. Idempotent outcome from the caller's perspective.
+      return { ok: false, error: "not_found" };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    console.error("[postService.deleteBatchForever]", err);
     return { ok: false, error: "db_failed" };
   }
 }
