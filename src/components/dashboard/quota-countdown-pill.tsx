@@ -17,10 +17,14 @@ import Link from "next/link";
  *    `batchesRemaining === 0` → `"Resets in {N}d"` via the at-cap countdown.
  *    Starter's cap is 1 batch per rolling 7-day window, so under-cap is
  *    always exactly one batch.
- *  - **Pro** (Phase 4 D-A12 / D-A14 + Scheduled redesign D-S11) —
- *    `batchesRemaining > 0` → `"{N} batches left"` (singular `"1 batch left"`
- *    when N=1, deterministic, no sentinel). `batchesRemaining === 0` →
- *    `"Resets in {N}d"` against the rolling 30-day period end.
+ *  - **Pro** (Phase 4 D-A12 / D-A14 + Scheduled redesign D-S11 + Stage-2
+ *    D-S2-10) — `batchesRemaining > 0` → `"{N} batches left"` (singular `"1
+ *    batch left"` when N=1, deterministic, no sentinel). `batchesRemaining
+ *    === 0` → `"Resets in {N}d"` against the rolling 30-day period end.
+ *    As of Stage-2, `batchesRemaining = 4 - scheduledBatchCount` where
+ *    `scheduledBatchCount` counts only `weekly_batches.status IN
+ *    ('scheduling', 'completed')`. Cancelled and reviewing batches on
+ *    `/create` no longer deduct.
  *
  * Visual intent:
  *  - Muted, not champagne. The plan pill is the focal accent on the TopBar;

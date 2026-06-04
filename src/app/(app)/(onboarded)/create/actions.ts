@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
@@ -114,4 +115,52 @@ export async function generateWeeklyAction(
     case "db_failed":
       return { error: "Something went wrong saving your posts. Try again." };
   }
+}
+
+/**
+ * Server action backing `<DeleteBatchForeverDialog />` (Stage-2 task-08,
+ * D-S2-8). Thin wrapper around `postService.deleteBatchForever`:
+ *
+ *   1. Re-resolves the Better Auth session — the (onboarded) layout already
+ *      guarantees this on the page render, but the action can be hit
+ *      directly via a stale-client fetch, so we re-check.
+ *   2. Delegates to the service, which owns the ownership + status guard,
+ *      the image-preservation handoff to `imageService.retainImagesToLibrary`,
+ *      and the cascading DELETE on `weekly_batches`.
+ *   3. On success, revalidates `/create` so the now-deleted card disappears
+ *      from the unscheduled-batches list.
+ *
+ * The service return shape today is `{ ok: true }` (no `imageCount`) — the
+ * dialog falls back to its prop-passed `imageCount` for the success-toast
+ * count. Service errors map 1:1 to the union surfaced here; `db_failed`
+ * collapses into the dialog's generic-error toast path.
+ *
+ * Unlike `generateWeeklyAction`, unauthenticated callers get a structured
+ * `{ ok: false, error: 'unauthenticated' }` rather than a redirect — the
+ * caller is a dialog inside a long-lived page, not a form submit, so a
+ * redirect mid-transition would jank the UI. The dialog can choose its
+ * surface (currently: collapsed into the generic toast).
+ */
+export async function deleteBatchForeverAction(
+  batchId: string,
+): Promise<
+  | { ok: true }
+  | {
+      ok: false;
+      error:
+        | "unauthenticated"
+        | "not_found"
+        | "not_owned"
+        | "not_cancelled"
+        | "db_failed";
+    }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return { ok: false, error: "unauthenticated" };
+
+  const result = await postService.deleteBatchForever(session.user.id, batchId);
+  if (!result.ok) return result;
+
+  revalidatePath("/create");
+  return { ok: true };
 }

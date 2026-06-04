@@ -272,7 +272,7 @@ export async function getCurrentBatch(
  * Most recent batch in any *resumable* status — `reviewing`, `scheduling`,
  * `scheduled`, or `cancelled`. Used by `/posts` when no `?batchId=` query
  * param is supplied (sidebar "My Posts" link, the QuotaGatedScreen's
- * "Return to your current batch" CTA).
+ * "See the batch currently posting" CTA).
  *
  * Resolves regardless of subscription plan — viewing or managing an
  * existing batch is never gated. Only generating a *new* batch goes through

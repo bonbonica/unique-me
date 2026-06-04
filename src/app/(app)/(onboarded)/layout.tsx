@@ -61,6 +61,19 @@ export default async function OnboardedLayout({
       ? await postService.hasAnyBatch(session.user.id)
       : false;
 
+  // Pro-only `scheduledBatchCount` lookup feeds `<DashboardTopBar />`'s pill
+  // (Stage-2 D-S2-10). Trial/Starter ignore the value entirely. Sourced from
+  // `postService.getScheduledViewForUser`, which task-02 extended to expose
+  // `scheduledBatchCount` on the `ScheduledView` snapshot. Gated by plan so
+  // Trial/Starter renders skip the extra query (mirrors the `hasAnyBatch`
+  // pattern above). Zero default keeps the prop type a plain `number` for
+  // the topbar's pure-render contract.
+  const scheduledBatchCount =
+    subscription.plan === "pro" && subscription.status === "active"
+      ? (await postService.getScheduledViewForUser(session.user.id))
+          .scheduledBatchCount
+      : 0;
+
   return (
     <div className="flex flex-col md:flex-row min-h-[calc(100vh-4rem)]">
       <DashboardSidebar />
@@ -69,6 +82,7 @@ export default async function OnboardedLayout({
         <DashboardTopBar
           subscription={subscription}
           hasAnyBatch={hasAnyBatch}
+          scheduledBatchCount={scheduledBatchCount}
         />
         <div className="flex-1 px-5 sm:px-8 lg:px-12 py-8 sm:py-12">
           {children}

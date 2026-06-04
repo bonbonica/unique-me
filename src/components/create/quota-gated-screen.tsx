@@ -2,6 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 import Link from "next/link";
+import { CurrentlyPostingCta } from "@/components/create/currently-posting-cta";
 import { Button } from "@/components/ui/button";
 
 /**
@@ -130,9 +131,7 @@ function QuotaVariant({ nextResetAt }: { nextResetAt: Date }) {
         Your weekly cycle resets 7 days after your last batch was created.
       </p>
       <div className="flex flex-col gap-3">
-        <Button asChild size="lg" className="rounded-full glow-champagne">
-          <Link href="/posts">Return to your current batch →</Link>
-        </Button>
+        <CurrentlyPostingCta />
       </div>
     </div>
   );
@@ -181,9 +180,7 @@ function MonthlyQuotaVariant({ nextResetAt }: { nextResetAt: Date }) {
       </h1>
       <p className="text-base text-muted-foreground leading-7">{resetCopy}</p>
       <div className="flex flex-col gap-3">
-        <Button asChild size="lg" className="rounded-full glow-champagne">
-          <Link href="/posts">Return to your current batch →</Link>
-        </Button>
+        <CurrentlyPostingCta />
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { UnscheduledBatchCard as Data } from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
+import { DeleteBatchForeverTrigger } from "./delete-batch-forever-trigger";
 
 type Props = { data: Data };
 
@@ -61,16 +62,24 @@ export function UnscheduledBatchCard({ data }: Props) {
           </span>
         </div>
 
-        <Button asChild size="sm">
-          <Link href={`/posts?batchId=${data.id}`}>
-            Open
-            <ArrowRight
-              className="ml-1 size-4"
-              strokeWidth={1.5}
-              aria-hidden="true"
+        <div className="flex items-center gap-2">
+          {data.status === "cancelled" && (
+            <DeleteBatchForeverTrigger
+              batchId={data.id}
+              imageCount={data.totalPosts}
             />
-          </Link>
-        </Button>
+          )}
+          <Button asChild size="sm">
+            <Link href={`/posts?batchId=${data.id}`}>
+              {CTA_LABEL[data.status]}
+              <ArrowRight
+                className="ml-1 size-4"
+                strokeWidth={1.5}
+                aria-hidden="true"
+              />
+            </Link>
+          </Button>
+        </div>
       </div>
     </article>
   );
@@ -115,8 +124,21 @@ const STATE_CHIP: Record<
     className: "",
   },
   cancelled: {
-    label: "CANCELLED — re-schedule",
+    label: "CANCELLED",
     variant: "outline",
     className: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   },
+};
+
+/**
+ * Per-status CTA label lookup. Keyed by the same narrowed status union as
+ * `STATE_CHIP` so adding a new status forces a compile error here too.
+ *
+ * Per D-S2-16, the recoverability cue moves out of the chip (now plain
+ * `CANCELLED`) and into the verb on the primary action: cancelled cards
+ * open into the post review to be re-scheduled, so the CTA says so.
+ */
+const CTA_LABEL: Record<Data["status"], string> = {
+  reviewing: "Open",
+  cancelled: "Open to reschedule",
 };

@@ -21,9 +21,9 @@ import { postService } from "@/lib/services";
  * to {@link postService.getResumableBatch} which returns the most recent
  * batch in any resumable status (`reviewing`, `scheduling`, `scheduled`,
  * or `cancelled`) regardless of plan — so the sidebar "My Posts" link and
- * the QuotaGatedScreen's "Return to your current batch" CTA can reach an
- * existing batch even when `subscriptionService.canGenerate` would block
- * a fresh one.
+ * the QuotaGatedScreen's "See the batch currently posting" CTA can reach
+ * an existing batch even when `subscriptionService.canGenerate` would
+ * block a fresh one.
  */
 type SearchParams = Promise<{ batchId?: string }>;
 
