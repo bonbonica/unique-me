@@ -185,16 +185,15 @@ export type BatchBoxData = {
   theme: string;
   importantThing: string;
   /**
-   * Live count under the Cancel-vs-Delete contract (§0 + D-S2-6 in the
-   * Stage-2 spec). This is `COUNT(DISTINCT scheduled_posts.postId WHERE
-   * batchId in batchIds AND status='pending')` — NOT the nominal
-   * `weeklyBatches.totalPosts` column. Cancelled posts (status='cancelled')
-   * are treated as absent, so the box's `{N} posts` link reflects what
-   * will actually publish.
+   * Nominal post count from `weeklyBatches.totalPosts` (7 for Trial / Starter,
+   * 7 or 9 for Pro depending on the batch). Same source `/create`'s
+   * {@link UnscheduledBatchCard.totalPosts} reads from — keeps the two pages
+   * in agreement.
    *
-   * Will read 0 for every batch in production until the Phase-4 cron
-   * starts writing `scheduled_posts` rows. That is correct under the new
-   * contract — see the docblock on {@link getScheduledViewForUser}.
+   * NOT a live "what will actually publish" count today. A future spec wave
+   * that pairs (a) a `scheduled_posts` writer (Phase-4 cron) with (b) the
+   * cancel UI will swap this to a `scheduled_posts`-backed live count — see
+   * {@link getScheduledViewForUser}'s docblock for the switchover criteria.
    */
   totalPosts: number;
   counts: { facebook: number; instagram: number; linkedin: number };
@@ -438,113 +437,6 @@ export async function getUnscheduledBatchesForUser(
 }
 
 /**
- * Bulk-load per-network "live" scheduled-post counts for a set of batches under
- * the Cancel-vs-Delete contract (Stage-2 §0 + D-S2-6). Reads `scheduled_posts`
- * filtered to `status='pending'` — cancelled rows are treated as absent so the
- * box's `{N} posts` link and per-network counts reflect what will actually
- * publish.
- *
- * Returns one entry per requested `batchId`:
- *  - `totalLivePosts` = `COUNT(DISTINCT scheduled_posts.postId)` for that
- *    batch, filtered to `status='pending'`. This is the value
- *    `BatchBoxData.totalPosts` surfaces (was previously
- *    `weeklyBatches.totalPosts`, the nominal column — that no longer reflects
- *    reality once per-post cancel is non-destructive).
- *  - `counts.{facebook|instagram|linkedin}` = per-network `COUNT(*)` from the
- *    same scope, also filtered to `status='pending'`.
- *
- * Two grouped queries (per-`(batchId, platform)` counts + per-`batchId`
- * distinct-post counts), both `WHERE posts.batchId IN (...) AND status='pending'`,
- * because a single grouped query cannot cleanly emit both the per-platform
- * count AND the cross-platform `COUNT(DISTINCT postId)` in one shot. The map is
- * pre-seeded so every requested id has all-zero values before merging — callers
- * can `map.get(id)` without a nullish-coalesce fallback.
- *
- * Empty input → empty map, no query (Postgres rejects `WHERE col IN ()`).
- *
- * Module-private; the only consumer is {@link getScheduledViewForUser}.
- * `loadSelectionCounts` is preserved separately for `/create` cards which read
- * from `post_selections` (D-S2-12 §0 — those batches are `reviewing`/`cancelled`
- * and have no `scheduled_posts` rows yet).
- */
-type ScheduledCounts = {
-  totalLivePosts: number;
-  counts: { facebook: number; instagram: number; linkedin: number };
-};
-
-async function loadScheduledCounts(
-  batchIds: string[]
-): Promise<Map<string, ScheduledCounts>> {
-  const countsByBatch = new Map<string, ScheduledCounts>();
-  for (const id of batchIds) {
-    countsByBatch.set(id, {
-      totalLivePosts: 0,
-      counts: { facebook: 0, instagram: 0, linkedin: 0 },
-    });
-  }
-
-  if (batchIds.length === 0) return countsByBatch;
-
-  // Per-`(batchId, platform)` count of live (pending) scheduled rows. Join
-  // path: scheduled_posts.postId → posts.id → posts.batchId. There is no
-  // direct scheduled_posts.batchId column.
-  const platformRows = await db
-    .select({
-      batchId: posts.batchId,
-      platform: scheduledPosts.platform,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(scheduledPosts)
-    .innerJoin(posts, eq(scheduledPosts.postId, posts.id))
-    .where(
-      and(
-        inArray(posts.batchId, batchIds),
-        eq(scheduledPosts.status, "pending")
-      )
-    )
-    .groupBy(posts.batchId, scheduledPosts.platform);
-
-  for (const row of platformRows) {
-    // Defensive: posts.batchId is non-null at the schema level, but the join
-    // projection types it as nullable. Skip the (impossible) null case rather
-    // than assert with `!`.
-    if (!row.batchId) continue;
-    const bucket = countsByBatch.get(row.batchId);
-    if (!bucket) continue;
-    if (row.platform === "facebook") bucket.counts.facebook = row.count;
-    else if (row.platform === "instagram") bucket.counts.instagram = row.count;
-    else if (row.platform === "linkedin") bucket.counts.linkedin = row.count;
-  }
-
-  // Per-batch `COUNT(DISTINCT postId)` of live scheduled rows. A post
-  // scheduled to FB+IG+LI contributes 3 to the per-platform counts above but
-  // 1 to this total — which matches what the `{N} posts` link should display.
-  const distinctRows = await db
-    .select({
-      batchId: posts.batchId,
-      total: sql<number>`count(distinct ${scheduledPosts.postId})::int`,
-    })
-    .from(scheduledPosts)
-    .innerJoin(posts, eq(scheduledPosts.postId, posts.id))
-    .where(
-      and(
-        inArray(posts.batchId, batchIds),
-        eq(scheduledPosts.status, "pending")
-      )
-    )
-    .groupBy(posts.batchId);
-
-  for (const row of distinctRows) {
-    if (!row.batchId) continue;
-    const bucket = countsByBatch.get(row.batchId);
-    if (!bucket) continue;
-    bucket.totalLivePosts = row.total;
-  }
-
-  return countsByBatch;
-}
-
-/**
  * Data bundle for the Scheduled page (Stage-2 rewrite — D-S2-11, D-S2-12,
  * plus the Cancel-vs-Delete contract at §0).
  *
@@ -555,19 +447,27 @@ async function loadScheduledCounts(
  * rolling-4 eviction enforces the cap upstream, so this read just trusts
  * `LIMIT 4`.
  *
- * `BatchBoxData.totalPosts` and `BatchBoxData.counts.*` are LIVE counts
- * derived from `scheduled_posts` filtered to `status='pending'` (see
- * {@link loadScheduledCounts}). This REPLACES the Wave-4 use of
- * {@link loadSelectionCounts} for the /schedule grid — `loadSelectionCounts`
- * still powers `/create` cards because those batches are `reviewing` or
- * `cancelled` and have no `scheduled_posts` rows. Cancelled rows in
- * `scheduled_posts` are treated as absent so the box reflects what will
- * actually publish (§5.3, §6.7 of the spec).
+ * `BatchBoxData.totalPosts` reads `weeklyBatches.totalPosts` (the nominal
+ * column) and `BatchBoxData.counts.*` reads `post_selections` via
+ * {@link loadSelectionCounts} — the **same sources** `/create` cards use via
+ * {@link getUnscheduledBatchesForUser}. Keeping both pages on identical
+ * readers means the box on `/schedule` and the card on `/create` for the
+ * same batch always show the same FB / IG / LI / `{N} posts` numbers.
  *
- * **Production reality.** `scheduled_posts` has no writer until the Phase-4
- * cron lands; until then every count will read 0. That is correct under the
- * new contract — once the writer ships, the counts become real with no
- * further code change.
+ * **Why not the `scheduled_posts`-backed reader the Cancel-vs-Delete spec
+ * (§5.3, §6.7) describes?** That reader is the future state. Two
+ * preconditions must BOTH be true before we can switch:
+ *   1. A writer populates `scheduled_posts` rows when a batch transitions
+ *      to `scheduling` (Phase-4 cron, or an explicit service in
+ *      `scheduleBatch`). Until that exists, the table is empty and a
+ *      `scheduled_posts`-backed reader returns 0 for every batch.
+ *   2. The cancel UI (task-15) can flip rows to `status='cancelled'`. Until
+ *      that ships, there is nothing for the reader to filter out — the
+ *      "selections except cancelled" predicate collapses to "selections."
+ * Until BOTH land, reading `post_selections` + nominal `totalPosts` is the
+ * correct present-day truth (the wizard freezes selections when the batch
+ * flips from `reviewing` to `scheduling`, so they don't drift). Switch the
+ * reader in the wave that pairs (1) and (2). Spec §5.3 carries the same note.
  *
  * `BatchBoxData` does NOT carry a `days[]` field (Wave-4 corrections at §0,
  * D-S2-12). The per-day / per-network view lives on `/schedule/[batchId]`
@@ -581,8 +481,8 @@ async function loadScheduledCounts(
  * Query plan (2 queries when batches exist; 1 when not):
  *  1. Top-4 batches by `createdAt DESC` filtered to `status IN ('scheduling',
  *     'completed')` for `userId`.
- *  2. {@link loadScheduledCounts} — per-network `pending` counts + distinct
- *     `pending` post count for the same batch ids.
+ *  2. {@link loadSelectionCounts} — per-network selection counts for the same
+ *     batch ids (shared with `getUnscheduledBatchesForUser`).
  *
  * `scheduledBatchCount` is set from `current.length` — see the `ScheduledView`
  * docblock for the rationale (rolling-4 invariant is enforced upstream).
@@ -598,6 +498,7 @@ export async function getScheduledViewForUser(
       id: weeklyBatches.id,
       theme: weeklyBatches.theme,
       importantThing: weeklyBatches.importantThing,
+      totalPosts: weeklyBatches.totalPosts,
       status: weeklyBatches.status,
       ordinal: weeklyBatches.batchOrdinalInPeriod,
       createdAt: weeklyBatches.createdAt,
@@ -620,34 +521,31 @@ export async function getScheduledViewForUser(
 
   const batchIds = rows.map((r) => r.id);
 
-  // Per-batch live counts under the Cancel-vs-Delete contract (§0). Pre-seeded
-  // for every requested id so the lookup below never needs a nullish fallback.
-  // Replaces the Wave-4 loadSelectionCounts call for /schedule — see this
-  // function's docblock.
-  const scheduledByBatch = await loadScheduledCounts(batchIds);
+  // Per-network selection counts — same helper `/create` uses, so the two
+  // pages agree on FB/IG/LI counts for the same batch. Pre-seeds zeros for
+  // every batch id so the lookup below never needs a nullish fallback.
+  // See this function's docblock for why the spec's `scheduled_posts`-backed
+  // reader is deferred until Phase-4 cron + cancel UI both ship.
+  const countsByBatch = await loadSelectionCounts(batchIds);
 
-  const current: BatchBoxData[] = rows.map((r) => {
-    const liveCounts = scheduledByBatch.get(r.id) ?? {
-      totalLivePosts: 0,
-      counts: { facebook: 0, instagram: 0, linkedin: 0 },
-    };
-
-    return {
-      id: r.id,
-      ordinal: r.ordinal,
-      theme: r.theme,
-      importantThing: r.importantThing,
-      // Live post count derived from scheduled_posts (status='pending'),
-      // NOT the nominal weeklyBatches.totalPosts column — see the field's
-      // docblock for the rationale.
-      totalPosts: liveCounts.totalLivePosts,
-      counts: liveCounts.counts,
-      // Stage-1 dormant defaults unchanged — Phase 4/7 still owns the flip.
-      derivedState: "upcoming" as const,
-      alreadyPostedCount: 0,
-      queuedCount: liveCounts.totalLivePosts,
-    };
-  });
+  const current: BatchBoxData[] = rows.map((r) => ({
+    id: r.id,
+    ordinal: r.ordinal,
+    theme: r.theme,
+    importantThing: r.importantThing,
+    // Nominal total from weeklyBatches.totalPosts — same source `/create`
+    // uses via getUnscheduledBatchesForUser. See the field's docblock.
+    totalPosts: r.totalPosts,
+    counts: countsByBatch.get(r.id) ?? {
+      facebook: 0,
+      instagram: 0,
+      linkedin: 0,
+    },
+    // Stage-1 dormant defaults unchanged — Phase 4/7 still owns the flip.
+    derivedState: "upcoming" as const,
+    alreadyPostedCount: 0,
+    queuedCount: r.totalPosts,
+  }));
 
   return {
     current,
