@@ -4,14 +4,38 @@ Stage 1 (UI-only, sidebar + cards + dormant contracts) shipped at `specs/schedul
 
 ## 0. Status of items flagged this revision
 
+### Wave-4 corrections (this spec update)
+
+Wave-4 shipped a `<SevenDayStrip />` on each `<ScheduledBatchBox />`. Two bugs were discovered after the fact:
+
+1. **Truth source bug.** The strip marked a day "scheduled" (✓) based on the presence of a `posts` row for that ordinal. The real truth is whether a `scheduled_posts` row exists for that `(postId, platform)` pair. A post can exist without being scheduled to a given network.
+2. **Hardcoded length bug.** The strip rendered exactly 7 cells (`for (let ordinal = 1; ordinal <= 7; ordinal++)`). Pro batch 4 is 9 posts, so posts 8 and 9 were silently dropped from the strip while still being counted in `{N} posts`.
+
+**Correction.** The per-day strip is removed from `<ScheduledBatchBox />`. The per-day / per-network view moves to the detail page at `/schedule/[batchId]` and becomes a **network × day grid** (rows = networks, columns = days, column count = real batch length, cell = ✓ iff a `scheduled_posts` row exists for that pair). See updated D-S2-12, D-S2-15, §5.3, §6.7, §6.8, §6.9, §6.10, §10, §11.
+
+This spec update edits the affected sections in place. Task-15 is re-issued after spec sign-off; task-13 (component + data field) is undone in a follow-up corrective code wave (component + `days[]` + strip-related computation in `getScheduledViewForUser` all get deleted together).
+
+### Cancel-vs-Delete contract (this spec update)
+
+Earlier drafts of Stage-2 specced per-post `cancelPost` as a destructive `DELETE FROM posts` with cascade + image-to-Library preservation. That was wrong for the product intent. The corrected contract:
+
+1. **CANCEL is non-destructive and retrievable.** `cancelPost(sessionUserId, postId, platform?)` becomes an `UPDATE scheduled_posts SET status='cancelled'` over the chosen scope. The `scheduled_posts.status` union gains a new value `'cancelled'` (additive; text column — no Drizzle migration). The post family (`posts`, `post_variations`, `post_selections`, `post_images`) is preserved. **No image movement on cancel** — the image stays attached because the post still exists. Reversible via `restorePost` (D-S2-21).
+2. **Per-network granularity is now possible at the service layer.** Omitting `platform` cancels every `pending` row for the post (whole-post cancel — the only UI surface in Stage-2). Supplying `platform` cancels just that one network's row. Stage-2 UI calls cancel whole-post only; per-network UI is a later concern.
+3. **Readers treat `'cancelled'` like absent.** Network × Day grid cell (D-S2-15) = ✓ iff a `scheduled_posts` row exists for `(postId, platform)` with `status IN ('pending', 'posted')`. `getScheduledViewForUser` per-network counts and the box's `{N} posts` total exclude `'cancelled'` rows so the user sees what's actually scheduled.
+4. **DELETE is reserved as a future destructive surface (D-S2-22).** `postService.deletePost(sessionUserId, postId)` is named in the spec but NOT built in Stage-2. When built, it will be the path that retains the image to the Library and `DELETE FROM posts` with cascade — and will be what later triggers AI per-network regeneration (an entirely deleted post may be re-generated; a merely cancelled post is preserved as-is). Naming it now prevents a competing destructive cancel path from being added by mistake.
+5. **Batch-level surfaces are UNCHANGED.** `stopBatch` (the `[Cancel batch]` action) still flips `weekly_batches.status` → `cancelled` with no cascade (already retrievable via the `/create` card — D-S6 in Stage-1). `deleteBatchForever` (the `[Delete forever]` action on cancelled cards) still does image-preservation + cascade `DELETE FROM weekly_batches`. Only per-post `cancelPost` changes.
+6. **Image Library implication.** Because cancel no longer feeds the Library, and `deletePost` doesn't exist yet, the only path that fills `library_images` in Stage-2 is `deleteBatchForever`. The Library will stay empty for most users until `deletePost` ships in a future spec. Task-16 (the `/library` page) still ships as planned — it just has fewer inputs until then.
+
+See updated D-S2-6, D-S2-7, D-S2-21 (new), D-S2-22 (new), §2.2, §5.3, §6.9, §6.11, §8, §10. Wave 4.5 corrective code wave applies this contract alongside the strip removal; task-15 re-issue calls the new `cancelPost` signature.
+
 ### Resolved (locked into the spec body)
 
 - **Rolling-4 counting basis** = `weekly_batches.status IN ('scheduling', 'completed')`. Cancelled and reviewing batches do NOT eat a rolling-4 slot — they live on `/create` as cards. Slot consumption happens at the **schedule action**, not at generation.
 - **Image Library** lives in a new `library_images` table, capped at 30 per user (rolling, oldest-by-`createdAt` evicts). `library_images` survives parent-post deletion; `post_images` is for the attached-to-a-post case.
 - **Image-service helper** (`src/lib/services/image-service.ts`) is the single orchestrator for blob lifecycle. All deletion paths go through it. Order is invariant: **read URL → blob `del()` → DB row removal.** Blob failures log to `post_logs.action='blob_orphan'` and never block the caller.
-- **Per-post cancel** = hard-delete the post, preserve its image to `library_images` first. Available until the post's `scheduled_posts.scheduledTime > now()` AND no `scheduled_posts.status='posted'` exists. No undo until the future soft-delete spec.
+- **Per-post cancel** = non-destructive status flip on `scheduled_posts` to `'cancelled'` (additive value; no DELETE, no cascade, NO image movement). Post family preserved. Available until the chosen scope (per-post or per-`(postId, platform)`) has at least one `scheduled_posts` row with `status='pending' AND scheduledTime > now()` AND no row with `status='posted'`. **Reversible via `restorePost`** (D-S2-21). True destruction is the reserved future `deletePost` (D-S2-22) — not built in Stage-2. See Cancel-vs-Delete contract at §0.
 - **Delete-forever** on a cancelled card = hard-delete the batch, preserve images. Same retention rule. Available on `status='cancelled'` only.
-- **Schedule page redesign**: 2x2 grid (max 4 boxes), single column on mobile, drops the Stage-1 Past Batches disclosure. `[Create next batch — N/4]` CTA above the grid; each box gets a 7-day calendar strip + a clickable "N posts" link.
+- **Schedule page redesign**: 2x2 grid (max 4 boxes), single column on mobile, drops the Stage-1 Past Batches disclosure. `[Create next batch — N/4]` CTA above the grid; each box gets a clickable "N posts" link that opens the detail page. **No per-day strip on the box** — per-day / per-network view lives ONLY on the detail page (see D-S2-15 and Wave-4 corrections above).
 - **`/schedule/[batchId]` detail page** (new) renders 7 ordered day-slots with per-post cancel controls. Cancelled posts leave the slot empty/skipped (no compaction).
 - **`/library`** becomes a functional page (was Stage-1 placeholder).
 - **Top pill** re-anchored: `N batches left` while `scheduledBatchCount < 4`; `Resets in Nd` at `scheduledBatchCount === 4`. Cancelled cards on `/create` don't deduct. Trial/Starter pill behavior unchanged.
@@ -23,7 +47,8 @@ Stage 1 (UI-only, sidebar + cards + dormant contracts) shipped at `specs/schedul
 
 ### Items deliberately deferred (future specs, named so they don't sneak in)
 
-- **Soft-delete trash + restore + 30-day auto-purge** for posts. Stage-2's per-post cancel has no undo — that's acceptable because images survive in the Library. The future spec will reuse `image-service.ts` for its purge job.
+- **Soft-delete trash + 30-day auto-purge for `deletePost`-removed content.** Stage-2's per-post cancel IS retrievable via `restorePost` (D-S2-21) — that satisfies the reversibility half of the original trash concept. The future spec covers true-`deletePost` recovery + automatic purge after N days; it will reuse `image-service.ts` for its purge job.
+- **`deletePost(sessionUserId, postId)` — true per-post destructive action** (D-S2-22). Reserved name only in Stage-2; not built. Required to start filling the Image Library from per-post flows and to drive future AI per-network regeneration.
 - **Google Business Profile + X (Twitter)** as additional networks, with per-network max character limits.
 - **Drag-to-reorder posts** within a batch.
 - **Phase 7 posting service** (OAuth + FB/IG/LI publish, retry semantics, success/failure notifications). The dormant `currently_posting` emerald box variant stays present in the component for that work; Stage-2 still never produces it from data.
@@ -40,21 +65,23 @@ Stage 1 (UI-only, sidebar + cards + dormant contracts) shipped at `specs/schedul
 | **D-S2-3** | Blob failures during eviction are best-effort: each failure logs to `post_logs` with `action='blob_orphan'` and `details: { url, reason }`. The Schedule action commits regardless. |
 | **D-S2-4** | New table `library_images` (see §5.1). One row per retained image. Per-user, FK on `userId` with `onDelete cascade`. No FK to `posts` — the originating post is gone by the time the row exists. |
 | **D-S2-5** | Image Library cap = **30 per user**. When `retainImagesToLibrary` would push the count over 30, oldest-by-`createdAt` rows evict first (each eviction = `safeDeleteBlob` + delete row). Wrapped in a per-user `pg_advisory_xact_lock(hashtext('library:' || userId))` to make concurrent retains safe. |
-| **D-S2-6** | `postService.cancelPost(sessionUserId, postId)` is the single API for per-post cancel. Behavior: read `post_images.image_url` for the post → preserve to `library_images` (subject to D-S2-5) → delete `posts` row (cascade cleans `post_images`, `post_variations`, `post_selections`, `scheduled_posts`). Image blob stays alive — `library_images.imageUrl` now owns it. |
-| **D-S2-7** | Per-post cancel availability gate = the post has at least one `scheduled_posts` row with `scheduledTime > now()` AND NO `scheduled_posts` row with `status='posted'`. Else `cancelPost` returns `already_posted` and the UI toast says "Already posted, can't cancel." |
+| **D-S2-6** | `postService.cancelPost(sessionUserId, postId, platform?)` is a **non-destructive status flip** on `scheduled_posts`. Behavior: `UPDATE scheduled_posts SET status='cancelled' WHERE postId = ? AND status='pending'` scoped to `platform` when supplied (otherwise every `pending` row for the post). **No `DELETE`, no cascade, NO image movement.** The post family (`posts`, `post_variations`, `post_selections`, `post_images`) is preserved and the post remains restorable via `restorePost` (D-S2-21). Cancel is the lightweight, retrievable surface; true destruction is the reserved future `deletePost` (D-S2-22). *Corrects an earlier draft that did a destructive `DELETE FROM posts`; see Cancel-vs-Delete contract at §0.* |
+| **D-S2-7** | Per-post cancel availability gate = the scope chosen by `cancelPost(postId, platform?)` has at least one `scheduled_posts` row with `status='pending' AND scheduledTime > now()` AND NO `scheduled_posts` row (in the same scope) with `status='posted'`. Else `cancelPost` returns `already_posted` and the UI toast says "Already posted, can't cancel." Restore (`restorePost`, D-S2-21) uses the symmetric gate: at least one `'cancelled'` row in scope with `scheduledTime > now()` AND no `'posted'` row in scope. |
 | **D-S2-8** | `postService.deleteBatchForever(sessionUserId, batchId)` is available only on `weekly_batches.status='cancelled'`. Image-preservation rule mirrors D-S2-6 (per-post, per-image). Reviewing batches use the existing wizard discard flow — not this surface. |
 | **D-S2-9** | Image-service primitive `safeDeleteBlob(url)`: calls `del(url)` from `@vercel/blob`; catches any error; logs `post_logs.action='blob_orphan'` on failure with `details: { url, reason }`; never throws. Used by both `retainImagesToLibrary` (for eviction during cap overflow) and `deleteImagesPermanently` (for rolling-4 batch purge). |
 | **D-S2-10** | Top pill (Starter/Pro). Under cap (`scheduledBatchCount < 4`): `{N} batches left` where `N = 4 - scheduledBatchCount`. At cap (`=== 4`): `Resets in {N}d`. Trial pill unchanged from Stage-1 D-S12. The Stage-2 in-page CTA (D-S2-13) covers in-page capacity display; the pill is not duplicated there. |
 | **D-S2-11** | `/schedule` renders a 2x2 grid for up to 4 boxes (`scheduling + completed`), sorted by `createdAt DESC`. Single column on mobile (`grid-cols-1 md:grid-cols-2`). The Stage-1 Past Batches disclosure is removed (the rolling-4 IS the history). Empty state copy unchanged from Stage-1. |
-| **D-S2-12** | Each `<ScheduledBatchBox />` renders a 7-day calendar strip between the title strip and the network counts row. Data: `BatchBoxData.days: Array<{ label: string; date: Date; status: 'scheduled' \| 'cancelled' \| 'posted' }>`. Stage-2 produces `'scheduled'` (✓) and `'cancelled'` (✗ / empty). `'posted'` is the Phase-7 dormant contract value. 7 cells always, derived from `posts.postOrder` 1..7 — slots persist after cancellation (no compaction). |
+| **D-S2-12** | The `<ScheduledBatchBox />` does NOT render a per-day strip on the Scheduled grid. `BatchBoxData` carries no `days[]` field. Per-day / per-network truth lives ONLY on the detail page `/schedule/[batchId]` (D-S2-15). The box's surface — header strip, theme, per-network counts, `{N} posts` link, cancel batch button — stays exactly as Wave-3 left it (plus the link wrap from D-S2-14). *Corrects Wave-4: the strip was hardcoded to 7 cells and marked checks from `posts`-row presence rather than real `scheduled_posts` rows. See Wave-4 corrections at §0.* |
 | **D-S2-13** | `[Create next batch — N/4]` CTA renders above the 2x2 grid on `/schedule`. Disabled at `4/4` with tooltip `"Schedule a new batch by cancelling or finishing one."` Links to `/create`. |
 | **D-S2-14** | Each box's `{N} posts` text becomes a `<Link>` to `/schedule/[batchId]`. |
-| **D-S2-15** | `/schedule/[batchId]` (new page) renders 7 ordered day slots from `posts.postOrder`. Each slot: day-of-week label + scheduled time + post text preview + per-post `[Cancel]` (hidden when the cancel gate per D-S2-7 is closed). Page footer keeps the existing `[Cancel batch]` action. |
+| **D-S2-15** | `/schedule/[batchId]` (new page) renders a **network × day grid**: rows = networks (Facebook, Instagram, LinkedIn today — architected so additional rows can be appended for Google Business Profile, X, etc.), columns = days of the batch. Column count = the **real batch length** (`weeklyBatches.totalPosts` or equivalently `MAX(posts.postOrder)`), not hardcoded to 7 — Pro batch 4 = 9 posts. Each cell is a check (✓) iff a `scheduled_posts` row exists for that `(postId, platform)` pair; otherwise an X (✗). Below the grid the page lists each post (text + scheduled time + per-post `[Cancel]`) so the existing cancel affordance (per D-S2-6 / D-S2-7) is preserved. Page footer keeps the existing `[Cancel batch]` action. |
 | **D-S2-16** | `/create` cancelled card: chip text = `CANCELLED` (no `— re-schedule`). Primary CTA = `Open to reschedule →`. Secondary destructive action = `Delete forever` (opens confirm dialog explaining image preservation). |
 | **D-S2-17** | `/create` `in_progress` redirect copy = `See the batch currently posting →` (was `Return to your current batch →`). No behavior change; copy only. |
 | **D-S2-18** | `/library` renders the user's `library_images` rows, newest-first, in a responsive grid. Header text: `{N}/30 images`. Each tile has a destructive `[Delete]` action → confirm dialog → `imageService.deleteLibraryImage`. |
 | **D-S2-19** | Wizard bulk Schedule button (in `wizard-step.tsx:160`) checked-state icon — deepen the dark-mode red toward `oklch(0.62 0.18 30)` (rust/coral, still in the warm family per DESIGN.md). Light mode value unchanged (the dark-mode pale coral is the surface that fails). Only the icon `text-*` class flips on `isAllSelected`; surrounding chrome unchanged. |
 | **D-S2-20** | New Drizzle migration required for `library_images`. Run `pnpm db:generate` to produce the SQL, then `pnpm db:migrate` to apply locally. **Never `pnpm db:push`.** The migration commits to `drizzle/` with the next sequential number. |
+| **D-S2-21** | `postService.restorePost(sessionUserId, postId, platform?)` reverses a `cancelPost` for the chosen scope: `UPDATE scheduled_posts SET status='pending' WHERE postId = ? AND status='cancelled'` (filtered by `platform` when supplied; otherwise every `'cancelled'` row for the post). Gate: at least one `'cancelled'` row in scope with `scheduledTime > now()` AND no `'posted'` row in scope. No image movement, no row insert — the schedule entry was always there. Readers (network × day grid, per-network counts, box `{N} posts`) treat `'cancelled'` as absent, so a restore flips ✗ → ✓ on the grid and the row reappears in the per-network list. UI affordance (where the `[Restore]` button lives on the detail page) is a task-15 re-issue concern. See Cancel-vs-Delete contract at §0. |
+| **D-S2-22** | `postService.deletePost(sessionUserId, postId)` is the **reserved-future** destructive per-post action. When built (deferred — NOT Stage-2): `imageService.retainImagesToLibrary(sessionUserId, [postId])` then `DELETE FROM posts WHERE id = postId AND userId = sessionUserId` (cascade fires — same retain-then-delete pattern as `deleteBatchForever`, D-S2-8). It is the surface that will later trigger AI per-network regeneration (an entirely deleted post may be re-generated; a merely cancelled post is preserved). The name is reserved in the spec so no destructive cancel path is added by accident on top of `cancelPost`. Stage-2 does NOT build this. The Image Library will stay empty for most users until this surface exists. See §8 deferred items. |
 
 ---
 
@@ -79,17 +106,17 @@ User lands on `/schedule`: the grid shows the new batch1 (formerly batch2), batc
 
 Trial user has 1 batch in `scheduling`, 7 posts, scheduled across 7 days. Today is day 0; first post fires in 2 hours. User opens `/schedule/[batchId]`, clicks `[Cancel]` on post #4 (scheduled for 4 days from now).
 
-`postService.cancelPost(userId, post4.id)` runs:
-1. Reads `posts` row, confirms `userId === sessionUserId`.
-2. Reads `scheduled_posts` rows for post4. Confirms `scheduledTime > now()` and no row has `status='posted'`. (If either fails, returns `already_posted` and the UI shows a toast.)
-3. Reads `post_images.image_url` for post4 (≤ 1 row).
-4. `imageService.retainImagesToLibrary(userId, [post4.id])`:
-   - Acquires `pg_advisory_xact_lock(hashtext('library:' || userId))`.
-   - Counts user's `library_images`. Result: 0.
-   - Inserts new `library_images` row copying URL + prompt + source from `post_images`.
-   - Releases lock.
-5. Deletes `posts.id = post4.id`. Cascade removes the now-orphaned `post_images` row (blob URL is now owned by `library_images`), `post_variations`, `post_selections`, `scheduled_posts`.
-6. Returns `{ ok: true }`. UI updates: slot #4 on the detail page is empty/skipped; box on `/schedule` shows 6 ✓ + 1 ✗ on its 7-day strip; `{6} posts` text reflects truth.
+`postService.cancelPost(userId, post4.id)` runs (whole-post scope — no `platform` argument):
+1. Reads `posts` row, confirms `userId === sessionUserId`. If not → `not_found` / `not_owned`.
+2. Reads `scheduled_posts` rows for post4. Applies the D-S2-7 gate: at least one row with `status='pending' AND scheduledTime > now()`, no row with `status='posted'`. If the gate is closed → `already_posted` and the UI shows a toast.
+3. `UPDATE scheduled_posts SET status='cancelled' WHERE postId = post4.id AND status='pending'`. **No DELETE, no cascade, no image movement.** The post family — `posts`, `post_variations`, `post_selections`, `post_images` — and the image blob are all preserved.
+4. Returns `{ ok: true, batchId, cancelledCount: 3 }` (FB + IG + LI flipped to `cancelled`).
+
+UI updates: on the detail page, the network × day grid shows ✗ in every cell of the post-4 column (the rows still exist but their status is `'cancelled'`, which the reader treats as absent — D-S2-15 cell filter). Post-4 disappears from each network section in the per-post list below. On `/schedule` the box's `{N} posts` count drops to 6 because counts now exclude `'cancelled'` rows.
+
+**Restore path.** Later the user can click `[Restore]` (UI affordance defined by task-15 re-issue). `postService.restorePost(userId, post4.id)` runs the symmetric `UPDATE scheduled_posts SET status='pending' WHERE postId = post4.id AND status='cancelled'` subject to D-S2-21's still-future + no-posted gate. The post reappears in the grid (cells flip ✗ → ✓) and back into each network section; the box's `{N} posts` count increments back to 7. The image was never moved, so nothing has to be re-attached.
+
+**Library implication.** Cancel does NOT add anything to the user's Image Library. If the user truly wants the post gone and the image retained for reuse, the future `deletePost` surface (D-S2-22 — reserved, not built in Stage-2) is the path.
 
 ### 2.3 Pro user deletes a cancelled batch from /create
 
@@ -166,11 +193,11 @@ src/
 │   │   └── wizard-step.tsx                        MODIFIED — bulk Schedule button red fix
 │   └── schedule/
 │       ├── scheduled-page.tsx                     MODIFIED — 2x2 grid + drop past batches list
-│       ├── scheduled-batch-box.tsx                MODIFIED — 7-day strip + "N posts" link
+│       ├── scheduled-batch-box.tsx                MODIFIED — "N posts" link only (no strip — D-S2-12)
 │       ├── create-next-batch-cta.tsx              NEW — capacity CTA above grid
-│       ├── seven-day-strip.tsx                    NEW — calendar strip subcomponent
 │       ├── batch-detail-view.tsx                  NEW — /schedule/[batchId] body
-│       ├── post-day-slot.tsx                      NEW — single day row
+│       ├── network-day-grid.tsx                   NEW — network × day matrix on the detail page (D-S2-15)
+│       ├── batch-post-list-row.tsx                NEW — per-post row under the grid (text + per-post cancel)
 │       └── cancel-post-dialog.tsx                 NEW — per-post cancel confirm
 └── lib/
     ├── schema.ts                                  MODIFIED — add libraryImages table
@@ -287,16 +314,33 @@ async function safeDeleteBlob(url: string): Promise<void> {
 
 **Extend `getScheduledViewForUser`** so that:
 - `current` returns the most-recent 4 batches with `status IN ('scheduling', 'completed')` for the user, sorted by `createdAt DESC`. (Stage-1 returned only `scheduling` and windowed by the 30-day quota; Stage-2 uses rolling-4.)
-- Each `BatchBoxData` gains a `days: Array<{ label: string; date: Date; status: 'scheduled' | 'cancelled' | 'posted' }>` field derived from the batch's `posts` joined to `scheduled_posts.scheduledTime` (earliest scheduledTime per post; `label` is the short weekday like "Mon"). Stage-2 produces `'scheduled'` (post exists, no posted scheduled_posts) and `'cancelled'` (no post for that ordinal because cancelled). `'posted'` is dormant.
+- ~~Each `BatchBoxData` gains a `days[]` field~~ — **REMOVED in spec update.** The box no longer renders a per-day strip (see D-S2-12 + Wave-4 corrections at §0). Drop the `days[]` field from `BatchBoxData`, the `WEEKDAY_LABELS` + `DAY_MS` constants, the post-grouping by `postOrder`, and the day-strip-style `leftJoin(scheduledPosts)` from this function.
+- **Counts under the Cancel-vs-Delete contract (§0).** `getScheduledViewForUser` still touches `scheduled_posts` — but only for filtered counts, not for the removed day strip. Specifically:
+  - `BatchBoxData.totalPosts` = `COUNT(DISTINCT scheduled_posts.postId WHERE batchId in batchIds AND status='pending')`. This is the "live posts" count the box's `{N} posts` link surfaces (was previously a `COUNT(posts)` that decreased via the old destructive cascade; under the new non-destructive cancel the `posts` row stays, so the count must be derived from `scheduled_posts` instead).
+  - `BatchBoxData.counts.{facebook|instagram|linkedin}` = `COUNT(scheduled_posts WHERE batchId in batchIds AND platform = ? AND status='pending')`. Per-network counts exclude `'cancelled'` rows so the box reflects what will actually publish.
+  - The corrective code wave consolidates the two counts into one filtered aggregate query keyed by `(batchId, platform)`.
 - Stage-1's `past` array is dropped from the surface; the Past Batches disclosure is gone. Field can remain in the type with `[]` for backward-compat, or removed entirely if no other consumer reads it (preferred — kill dead surface).
 - Add a new field `scheduledBatchCount: number` to `ScheduledView` — used by the pill (D-S2-10).
 
-**`cancelPost(sessionUserId, postId)`** (D-S2-6, D-S2-7):
+**Detail-page data path (independent).** `/schedule/[batchId]` (task-15) reads `weekly_batches` + `posts` + `scheduled_posts` directly to produce the network × day grid (D-S2-15). That path is independent of `getScheduledViewForUser` and is unaffected by the strip removal above — no data the grid needs is lost. (A future refactor may extract this into `postService.getBatchDetailForUser(sessionUserId, batchId)` for testability; not required by this spec update.)
+
+**`cancelPost(sessionUserId, postId, platform?)`** (D-S2-6, D-S2-7) — **non-destructive status flip**:
 1. SELECT `posts.userId, posts.batchId` WHERE `id = postId`. If none → `not_found`. If `userId !== sessionUserId` → `not_owned`.
-2. SELECT `scheduled_posts.status, scheduled_posts.scheduledTime` for the post. If any row has `status='posted'`, OR all rows have `scheduledTime <= now()` → `already_posted`.
-3. Call `imageService.retainImagesToLibrary(sessionUserId, [postId])`.
-4. DELETE `posts.id = postId`. Cascade.
-5. Return `{ ok: true, batchId }`.
+2. SELECT `scheduled_posts.status, scheduled_posts.scheduledTime` for the chosen scope (filtered by `platform` when supplied; otherwise every row for the post). Apply the D-S2-7 gate: at least one row with `status='pending' AND scheduledTime > now()`, no row with `status='posted'`. Else → `already_posted`.
+3. `UPDATE scheduled_posts SET status='cancelled' WHERE postId = ? AND status='pending'` (plus `AND platform = ?` when supplied). RETURNING the affected ids → `cancelledCount`.
+4. Return `{ ok: true, batchId, cancelledCount }`.
+
+**No DELETE, no cascade, NO call to `imageService.retainImagesToLibrary`.** The post family (posts + post_variations + post_selections + post_images) is preserved. Reversible via `restorePost`.
+
+**`restorePost(sessionUserId, postId, platform?)`** (D-S2-21) — symmetric un-cancel:
+1. SELECT `posts.userId, posts.batchId` WHERE `id = postId`. If none → `not_found`. If `userId !== sessionUserId` → `not_owned`.
+2. SELECT `scheduled_posts.status, scheduled_posts.scheduledTime` for the chosen scope. Gate: at least one row with `status='cancelled' AND scheduledTime > now()`, no row with `status='posted'`. Else → `not_restorable`.
+3. `UPDATE scheduled_posts SET status='pending' WHERE postId = ? AND status='cancelled'` (plus `AND platform = ?` when supplied). RETURNING the affected ids → `restoredCount`.
+4. Return `{ ok: true, batchId, restoredCount }`.
+
+No row insert. The `scheduled_posts` entries already exist with their original `scheduledTime`s; restore just reverses the status flip. No image movement (the image stayed attached through the cancel).
+
+**`deletePost(sessionUserId, postId)`** (D-S2-22) — **RESERVED for a future spec; NOT implemented in Stage-2.** When built, will perform `imageService.retainImagesToLibrary(sessionUserId, [postId])` followed by `DELETE FROM posts WHERE id = postId AND userId = sessionUserId` (cascade fires, cleaning `post_images`, `post_variations`, `post_selections`, `scheduled_posts`). It is the path that will later trigger AI per-network regeneration. The name is reserved in this section so no destructive cancel path slips in under another name during the Wave 4.5 / Wave 5 work. See §8 deferred items.
 
 **`deleteBatchForever(sessionUserId, batchId)`** (D-S2-8):
 1. SELECT `weekly_batches.userId, weekly_batches.status` WHERE `id = batchId`. Guard: `userId === sessionUserId` AND `status === 'cancelled'`. Else `not_owned` / `not_cancelled`.
@@ -402,23 +446,17 @@ container mx-auto px-5 sm:px-8 lg:px-12
 
 Single button, full width on mobile, `max-w-xs` on desktop. Label: `Create next batch — {scheduledBatchCount}/4`. Disabled at `4/4` with `<Tooltip>` reading `Schedule a new batch by cancelling or finishing one.` Links to `/create` when enabled. Uses `<Button variant="default" size="lg">` per DESIGN.md §9.
 
-### 6.7 `<ScheduledBatchBox />` — 7-day strip + clickable count (D-S2-12, D-S2-14)
+### 6.7 `<ScheduledBatchBox />` — clickable count (D-S2-14)
 
-Stage-1 anatomy preserved (header strip → theme → counts → cancel). Two changes:
+Stage-1 anatomy preserved (header strip → theme → counts → cancel). Single change:
 
-1. Insert `<SevenDayStrip days={data.days} />` between the title strip and the network-counts row.
-2. The `{N} posts` text becomes `<Link href={`/schedule/${data.id}`} className="hover:underline text-foreground font-medium">{N} posts</Link>`.
+1. The `{N} posts` text becomes `<Link href={`/schedule/${data.id}`} className="hover:underline text-foreground font-medium">{N} posts</Link>`.
 
-The Cancel button stays for the `upcoming` and `currently_posting` variants — unchanged.
+The Cancel button stays for the `upcoming` and `currently_posting` variants — unchanged. **The 7-day strip insertion (originally task-13) is removed in this spec update — see Wave-4 corrections at §0 and D-S2-12.**
 
-### 6.8 `<SevenDayStrip />` — new
+### 6.8 `<SevenDayStrip />` — REMOVED in spec update
 
-```
-M  T  W  T  F  S  S
-✓  ✓  ✗  ✓  ✓  ✓  ✓
-```
-
-Cells: 7 fixed slots, gap-3, `text-xs text-muted-foreground` for day labels; cell state below — `text-primary` for `scheduled` (✓), `text-destructive` (or muted ✗) for `cancelled`. Dormant `posted` value: emerald (Phase-7 contract). Strip is purely presentational — no clicks.
+The per-day strip on the Scheduled grid has been removed (see Wave-4 corrections at §0 and D-S2-12). `<SevenDayStrip />` and its data plumbing (`days[]` on `BatchBoxData`, the post-grouping in `getScheduledViewForUser`) are deleted. The per-day / per-network view now lives only on the detail page network × day grid — see §6.9 and D-S2-15.
 
 ### 6.9 `/schedule/[batchId]` page (D-S2-15)
 
@@ -429,25 +467,124 @@ Header: ← Back to Scheduled  ·  BATCH {ordinal} · UPCOMING
 Theme: {theme}
 Important thing: {importantThing}
 
-Day slots (7):
-┌──────────────────────────────────────────┐
-│ Mon Jun 03  ·  9:00 AM                   │
-│ "Spring blooms at Bonbonica — ..."       │
-│ FB · IG · LI                             │
-│                              [Cancel]    │
-└──────────────────────────────────────────┘
-... (or skipped slot: greyed out, label only, no body)
+Network × Day grid (rows = networks, columns = days):
+
+           Day 1   Day 2   Day 3   Day 4   ...   Day N
+Facebook    ✓       ✓       ✗       ✓             ✓     ← clickable → jumps to #network-facebook
+Instagram   ✓       ✓       ✗       ✓             ✓     ← clickable → jumps to #network-instagram
+LinkedIn    ✓       ✗       ✗       ✓             ✓     ← clickable → jumps to #network-linkedin
+
+  • Column count N = real batch length
+    (`weeklyBatches.totalPosts`, equivalently `MAX(posts.postOrder)`).
+    Pro batch 4 = 9 posts; NOT hardcoded to 7.
+  • Cell is ✓ iff a `scheduled_posts` row exists for that
+    (postId, platform) pair **with `status IN ('pending',
+    'posted')`**. Otherwise ✗. `'cancelled'` rows count as
+    absent (per Cancel-vs-Delete contract at §0). Truth source
+    is `scheduled_posts` (status-filtered), NOT `posts`-row
+    existence.
+  • Column header carries the date / weekday derived from
+    `MIN(scheduled_posts.scheduledTime)` across that post's networks
+    (or a fallback `batch.createdAt + (ordinal - 1) days` when none
+    of the post's networks have a `scheduled_posts` row yet).
+  • Row order is fixed: Facebook → Instagram → LinkedIn today.
+    Architected so new networks (Google Business Profile, X, …) can
+    be appended as additional rows without restructuring.
+  • **Each row is clickable.** Clicking a row (label + cells)
+    jumps the page down to that network's section in the per-post
+    list below — anchor link to `#network-{platform}`, NOT a
+    filter (the rest of the page stays visible and unchanged).
+    Rows render with `cursor-pointer`, a hover state (e.g.
+    `bg-muted/60` lift), and visible `focus-visible:ring` so the
+    affordance reads clearly for mouse + keyboard users. Preferred
+    implementation is a native `<a href="#network-{platform}">`
+    wrapping the row content (native scroll + keyboard focus +
+    back-button parity); a button + `scrollIntoView({ behavior:
+    'smooth', block: 'start' })` is acceptable. Respect
+    `prefers-reduced-motion: reduce` per DESIGN.md §11 — when set,
+    drop the smooth scroll and use an instant jump.
+
+Per-post list (under the grid, GROUPED BY NETWORK):
+
+  ## Facebook                         id="network-facebook"
+  ┌──────────────────────────────────────────┐
+  │ Day 1 — Mon Jun 03 · 9:00 AM             │
+  │ "Spring blooms at Bonbonica — ..."       │
+  │                              [Cancel]    │
+  └──────────────────────────────────────────┘
+  ┌──────────────────────────────────────────┐
+  │ Day 2 — Tue Jun 04 · 9:00 AM             │
+  │ "..."                                    │
+  │                              [Cancel]    │
+  └──────────────────────────────────────────┘
+  ... (one row per post scheduled to Facebook)
+
+  ## Instagram                        id="network-instagram"
+  ┌──────────────────────────────────────────┐
+  │ Day 1 — Mon Jun 03 · 9:05 AM             │
+  │ "..."                                    │
+  │                              [Cancel]    │
+  └──────────────────────────────────────────┘
+  ... (one row per post scheduled to Instagram)
+
+  ## LinkedIn                         id="network-linkedin"
+  ┌──────────────────────────────────────────┐
+  │ Day 1 — Mon Jun 03 · 9:10 AM             │
+  │ "..."                                    │
+  │                              [Cancel]    │
+  └──────────────────────────────────────────┘
+  ... (one row per post scheduled to LinkedIn)
+
+  • One section per network in the same fixed row order as the
+    grid (Facebook → Instagram → LinkedIn today). Each section's
+    container carries `id="network-{platform}"` to match the
+    grid-row anchors above. New networks add a new section using
+    the same template.
+  • Inside a section, list every post with a `scheduled_posts`
+    row for that platform, ordered by `postOrder` ASC. A post
+    scheduled to multiple networks appears in each of its
+    network sections — every section is the truth about what
+    publishes to that network. NO post is hidden; this is
+    grouping, not filtering.
+  • Per-row time = the `scheduled_posts.scheduledTime` for THAT
+    (postId, platform) pair (not the cross-network `MIN`). This
+    surfaces the per-network offset (e.g. 9:00 / 9:05 / 9:10) so
+    the user can see exactly when each network fires.
+  • A post that exists but has no `scheduled_posts` row on any
+    network (orphaned in Stage-2; rare) renders nowhere in the
+    list — the grid row of ✗'s already tells the truth.
+  • Missing posts (the user already cancelled them) render
+    nowhere in any section. The grid column of ✗'s carries the
+    "cancelled" signal; the list is the live-only view.
+  • Per-post `[Cancel]` is shown on each row, gated by D-S2-7.
+    Cancel is at the post level (whole post = all networks for
+    that ordinal) — the Stage-2 UI calls `cancelPost(postId)`
+    without a `platform` argument. When the user clicks
+    `[Cancel]` from inside a network section, the dialog copy
+    MUST make both the cross-network scope AND the retrievable
+    nature explicit: e.g. *"Cancel this post? It will be
+    unscheduled on every network it was set to publish on. You
+    can restore it from this page later. The image stays
+    attached — no image movement on cancel."* (Image-to-Library
+    movement is a future-`deletePost` concern per D-S2-22.)
+    Per-network cancel (passing `platform` to `cancelPost`) is
+    available at the service layer but not surfaced in the
+    Stage-2 UI — a later spec will decide the UI affordance.
 
 Footer: [Cancel batch]
 ```
 
-### 6.10 `<PostDaySlot />` — new
+### 6.10 `<NetworkDayGrid />` + per-post list — new
 
-Renders one row. Props: `{ postOrder, post: { id, postText, hashtags } | null, networks: Platform[], scheduledTime: Date | null, canCancel: boolean, onCancel: () => void }`. If `post === null` → render the "skipped" empty state (greyed, italic, "No post for this day").
+`<NetworkDayGrid />` props: `{ posts: Array<{ id: string; postOrder: number; scheduledTimes: Record<Platform, Date | null> }>, networks: Platform[] }`. Renders an HTML `<table>` (or semantic grid) with one row per platform in `networks` and one column per post, ordered by `postOrder` ASC. Each cell renders ✓ iff `scheduledTimes[platform] !== null`, else ✗. Column header carries the day-of-week + date. Adding a network is a single push onto `networks`.
+
+The per-post list below the grid is a sibling component (`<BatchPostListRow />`): one row per post — text + scheduled time + per-post `[Cancel]` (gated by D-S2-7 — hidden when the gate is closed). If a `posts` row is missing for an ordinal (e.g. already cancelled), the list row renders the "skipped" empty state (greyed, italic, "No post for this day").
+
+> The old `<PostDaySlot />` from task-15.md is replaced by this two-component pair. Task-15 will be re-issued after this spec update is approved.
 
 ### 6.11 `<CancelPostDialog />` — new
 
-Dialog confirming per-post cancel. Copy: `"Cancel this post? It will be removed from the batch. The image moves to your Image Library."` Button: `[Cancel post]`. Submit calls `postService.cancelPost` via server action; on `already_posted`, error toast `"Already posted, can't cancel."`
+Dialog confirming per-post cancel. Copy: `"Cancel this post? It will be unscheduled on every network it was set to publish on. You can restore it from this page later. The image stays attached."` Button: `[Cancel post]` (rendered as a non-destructive variant — DESIGN.md `outline` or `secondary`, NOT `destructive` — because the action is reversible). Submit calls `postService.cancelPost(postId)` (whole-post scope, no `platform` argument) via server action; on `already_posted`, error toast `"Already posted, can't cancel."` On success, success toast `"Post cancelled. Restore it from this page."` See Cancel-vs-Delete contract at §0 — this dialog is NOT the destructive delete surface (that's reserved as future-`deletePost`, D-S2-22).
 
 ### 6.12 `<LibraryPage />` (route `/library`) (D-S2-18)
 
@@ -486,7 +623,7 @@ Pick the inline `cn` form unless additional surfaces need the same value.
 
 `postService.cancelPost` returns `{ ok: false, error: 'already_posted' }` when D-S2-7's gate is closed. UI:
 - Dialog stays open with inline `<p role="alert" className="text-destructive text-sm">Already posted, can't cancel.</p>` for 1s then dismisses.
-- Surrounding state (the slot still shows the post; `/schedule` grid count unchanged) is correct — nothing was deleted.
+- Surrounding state (the slot still shows the post; `/schedule` grid count unchanged) is correct — nothing was mutated. The `UPDATE` never ran because the gate caught the request before step 3 (per the cancelPost flow in §5.3).
 
 ### 7.2 Cancel batch already cancelled (existing)
 
@@ -520,7 +657,9 @@ If the blob `del` for one evicted image fails, the row eviction still proceeds (
 
 ## 8. What this spec deliberately does NOT cover
 
-- Soft-delete trash + restore + 30-day auto-purge. Per-post cancel has no undo until that lands.
+- **`deletePost(sessionUserId, postId)` — true per-post destructive action** (D-S2-22). Reserved name in this spec; not built. Future spec will: (a) retain the image to the Library, (b) `DELETE FROM posts` with cascade, (c) be the trigger surface for AI per-network regeneration. Until it ships, the Image Library fills only via `deleteBatchForever` (batch-level destruction).
+- **Soft-delete trash + 30-day auto-purge for `deletePost`-removed content.** Stage-2's per-post cancel IS retrievable via `restorePost` (D-S2-21) — that covers the reversibility half of the original trash concept. The future spec covers true-`deletePost` recovery + automatic purge after N days.
+- **Per-network cancel UI affordance.** Service layer supports it (`cancelPost(postId, platform)` — D-S2-6); Stage-2 UI surfaces only whole-post cancel. A later spec will decide the UI.
 - Google Business Profile + X as additional networks.
 - Drag-to-reorder posts.
 - Phase 7 posting service (OAuth + publishers).
@@ -549,18 +688,22 @@ If the blob `del` for one evicted image fails, the row eviction still proceeds (
 
 - [ ] `library_images` table added; migration generated + applied locally. No `pnpm db:push` used.
 - [ ] `imageService` exports `retainImagesToLibrary`, `deleteImagesPermanently`, `listLibrary`, `deleteLibraryImage`. URL-read-first ordering enforced. `safeDeleteBlob` swallows errors and logs orphans.
-- [ ] `postService.cancelPost` and `deleteBatchForever` shipped with the D-S2-6 / D-S2-7 / D-S2-8 contracts; both call `retainImagesToLibrary`.
+- [ ] `postService.cancelPost(sessionUserId, postId, platform?)` shipped as a non-destructive `UPDATE scheduled_posts SET status='cancelled'` per D-S2-6 / D-S2-7. **Does NOT call `retainImagesToLibrary`** (image stays attached because the post stays). `scheduled_posts.status` union extended to include `'cancelled'`.
+- [ ] `postService.restorePost(sessionUserId, postId, platform?)` shipped as the symmetric un-cancel per D-S2-21.
+- [ ] `postService.deletePost` is **RESERVED only** (D-S2-22) — not built in Stage-2. No competing destructive cancel path exists.
+- [ ] `postService.deleteBatchForever` shipped with the D-S2-8 contract (image-preservation + cascade); unchanged from earlier draft.
+- [ ] Readers respect the Cancel-vs-Delete contract: network × day grid cells = ✓ iff `scheduled_posts` row exists for `(postId, platform)` with `status IN ('pending', 'posted')`; `getScheduledViewForUser` per-network counts and box `{N} posts` total exclude `'cancelled'` rows.
 - [ ] `scheduleService.scheduleBatch` shipped with rolling-4 eviction (D-S2-2) and the `evictedBatchId` return shape.
-- [ ] `getScheduledViewForUser` returns the rolling-4 list + `days[]` per box + `scheduledBatchCount`.
+- [ ] `getScheduledViewForUser` returns the rolling-4 list + `scheduledBatchCount`. No `days[]` field (spec update — see Wave-4 corrections at §0); no `scheduled_posts` join in this function.
 - [ ] `<QuotaCountdownPill />` re-anchored on `scheduledBatchCount`. Trial unchanged.
 - [ ] `/create` cancelled cards: chip = `CANCELLED`; CTA = `Open to reschedule →`; secondary `Delete forever` action wired to `deleteBatchForever`.
 - [ ] `/create` `in_progress` copy: `See the batch currently posting →`.
 - [ ] `/schedule`: 2x2 grid; Past Batches disclosure gone; `[Create next batch — N/4]` CTA above grid (disabled at 4/4 with tooltip).
-- [ ] `<ScheduledBatchBox />`: 7-day strip rendered between header and counts; `{N} posts` is a link to `/schedule/[batchId]`.
-- [ ] `/schedule/[batchId]` page exists; shows 7 day slots; per-post cancel works subject to D-S2-7 gate.
+- [ ] `<ScheduledBatchBox />`: no per-day strip; `{N} posts` is a link to `/schedule/[batchId]`.
+- [ ] `/schedule/[batchId]` page exists; shows a **network × day grid** sized to the real batch length (rows = networks, columns = days, cell = ✓ iff a `scheduled_posts` row exists for that `(postId, platform)` pair); per-post list below the grid; per-post cancel works subject to D-S2-7 gate.
 - [ ] `/library` page: grid + `{N}/30 images` header + per-tile delete with confirm.
 - [ ] Wizard bulk Schedule button checked-icon: deeper red in dark mode; warm-palette compliant; light mode unchanged.
-- [ ] User-isolation regression tests (wave-6) prove cross-user safety on `cancelPost`, `deleteBatchForever`, `scheduleBatch`, `deleteLibraryImage`.
+- [ ] User-isolation regression tests (wave-6) prove cross-user safety on `cancelPost`, `restorePost`, `deleteBatchForever`, `scheduleBatch`, `deleteLibraryImage`.
 - [ ] Wave-6 verification runbook (`verification.md`) PASSed.
 - [ ] `pnpm lint`, `pnpm typecheck`, `pnpm build:ci` all exit 0.
 
@@ -575,8 +718,8 @@ If the blob `del` for one evicted image fails, the row eviction still proceeds (
 | 1 | 01, 02 | **Batch A:** 01, 02 (parallel — different files) | Foundation: Drizzle migration + read-only service extension. |
 | 2 | 03, 04, 05, 06 | **Batch A:** 03, 06 (parallel). **Then Batch B:** 04 alone. **Then Batch C:** 05 alone. | Tasks 04 + 05 both modify `post-service.ts` — never co-launched. A `Depends on:` note in a task file does not guarantee an agent waits; orchestrate the wait in the launcher. |
 | 3 | 07, 08, 09, 10 | **Batch A:** 07, 09, 10 (parallel). **Then Batch B:** 08 alone. | Task 08 re-edits `unscheduled-batch-card.tsx` after task 07's copy fixes land + needs task 05's service. |
-| 4 | 11, 12, 13, 14 | **Batch A:** 11, 12, 13 (parallel). **Then Batch B:** 14 alone. | Task 14 re-edits `scheduled-batch-box.tsx` after task 13 inserts the 7-day strip. |
-| 5 | 15, 16 | **Batch A:** 15, 16 (parallel — different routes) | Detail page + Library page. |
+| 4 | 11, 12, 13, 14 | **Batch A:** 11, 12, 13 (parallel). **Then Batch B:** 14 alone. | Task 14 re-edits `scheduled-batch-box.tsx` after task 13 inserts the 7-day strip. *Spec-update note: the strip from task-13 is removed in a follow-up Wave 4.5 corrective code wave (see Wave-4 corrections + Cancel-vs-Delete contract at §0). Wave 4.5 also refactors `cancelPost` to the non-destructive status flip (D-S2-6 / D-S2-21), extends `scheduled_posts.status` to include `'cancelled'`, and re-filters readers — task-14's `{N} posts` link remains.* |
+| 5 | 15, 16 | **Batch A:** 15, 16 (parallel — different routes) | Detail page (**network × day grid sized to real batch length** — D-S2-15) + Library page. Task-15 to be re-issued after this spec update is approved, against the new `cancelPost` + `restorePost` contracts; task-16 unchanged (Library still ships, just with fewer inputs until `deletePost` exists per D-S2-22). |
 | 6 | 17, 18, 19 | **Batch A:** 17 alone. **Then Batch B:** 18 alone. **Then Batch C:** 19 alone. | Sequential: 17 must land before 18 audits; 18 must PASS before 19 runs the E2E. |
 
 > **Orchestration rule for `/implement-feature`:** when a wave row lists multiple batches, complete a batch (all parallel agents reported back) before launching the next. Do not rely on `Depends on:` metadata to serialize same-batch agents — the launcher enforces serialization, not the agents.

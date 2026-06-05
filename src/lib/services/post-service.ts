@@ -119,10 +119,17 @@ export type StopResult =
     };
 
 export type CancelPostResult =
-  | { ok: true; batchId: string }
+  | { ok: true; batchId: string; cancelledCount: number }
   | {
       ok: false;
       error: "not_found" | "not_owned" | "already_posted" | "db_failed";
+    };
+
+export type RestorePostResult =
+  | { ok: true; batchId: string; restoredCount: number }
+  | {
+      ok: false;
+      error: "not_found" | "not_owned" | "not_restorable" | "db_failed";
     };
 
 export type BatchForReview = {
@@ -177,6 +184,18 @@ export type BatchBoxData = {
   ordinal: number | null;
   theme: string;
   importantThing: string;
+  /**
+   * Live count under the Cancel-vs-Delete contract (§0 + D-S2-6 in the
+   * Stage-2 spec). This is `COUNT(DISTINCT scheduled_posts.postId WHERE
+   * batchId in batchIds AND status='pending')` — NOT the nominal
+   * `weeklyBatches.totalPosts` column. Cancelled posts (status='cancelled')
+   * are treated as absent, so the box's `{N} posts` link reflects what
+   * will actually publish.
+   *
+   * Will read 0 for every batch in production until the Phase-4 cron
+   * starts writing `scheduled_posts` rows. That is correct under the new
+   * contract — see the docblock on {@link getScheduledViewForUser}.
+   */
   totalPosts: number;
   counts: { facebook: number; instagram: number; linkedin: number };
   // Stage-1 dormant: see type-level docblock above.
@@ -185,24 +204,6 @@ export type BatchBoxData = {
   alreadyPostedCount: number;
   // Stage-1 dormant: see type-level docblock above.
   queuedCount: number;
-  /**
-   * Stage-2 D-S2-12. 7 entries, post_order 1..7. `status` is:
-   *  - `"scheduled"`: a post row exists for this ordinal and no
-   *    `scheduled_posts` row for it has `status='posted'`.
-   *  - `"cancelled"`: no post row exists for this ordinal (per-post cancel
-   *    or the user de-selected the slot before scheduling).
-   *  - `"posted"`:   Phase-7 dormant. Stage-2 never produces this value.
-   *
-   * `date` is the earliest `scheduledPosts.scheduledTime` for that post, or
-   * a derived day-offset from `weeklyBatches.createdAt` when no schedule
-   * row exists yet (Stage-1 batches before Phase-4's `scheduleService.create`
-   * exists). `label` is the short weekday like `"Mon"`.
-   */
-  days: Array<{
-    label: string;
-    date: Date;
-    status: "scheduled" | "cancelled" | "posted";
-  }>;
 };
 
 /**
@@ -437,22 +438,115 @@ export async function getUnscheduledBatchesForUser(
 }
 
 /**
- * Short weekday labels, indexed by `Date.prototype.getDay()` (0 = Sunday).
- * Used by `getScheduledViewForUser` to label the 7-day strip cells for each
- * box (D-S2-12). Server-local timezone — task-13's UI component re-derives
- * client-side if a user-tz label is ever needed.
+ * Bulk-load per-network "live" scheduled-post counts for a set of batches under
+ * the Cancel-vs-Delete contract (Stage-2 §0 + D-S2-6). Reads `scheduled_posts`
+ * filtered to `status='pending'` — cancelled rows are treated as absent so the
+ * box's `{N} posts` link and per-network counts reflect what will actually
+ * publish.
+ *
+ * Returns one entry per requested `batchId`:
+ *  - `totalLivePosts` = `COUNT(DISTINCT scheduled_posts.postId)` for that
+ *    batch, filtered to `status='pending'`. This is the value
+ *    `BatchBoxData.totalPosts` surfaces (was previously
+ *    `weeklyBatches.totalPosts`, the nominal column — that no longer reflects
+ *    reality once per-post cancel is non-destructive).
+ *  - `counts.{facebook|instagram|linkedin}` = per-network `COUNT(*)` from the
+ *    same scope, also filtered to `status='pending'`.
+ *
+ * Two grouped queries (per-`(batchId, platform)` counts + per-`batchId`
+ * distinct-post counts), both `WHERE posts.batchId IN (...) AND status='pending'`,
+ * because a single grouped query cannot cleanly emit both the per-platform
+ * count AND the cross-platform `COUNT(DISTINCT postId)` in one shot. The map is
+ * pre-seeded so every requested id has all-zero values before merging — callers
+ * can `map.get(id)` without a nullish-coalesce fallback.
+ *
+ * Empty input → empty map, no query (Postgres rejects `WHERE col IN ()`).
+ *
+ * Module-private; the only consumer is {@link getScheduledViewForUser}.
+ * `loadSelectionCounts` is preserved separately for `/create` cards which read
+ * from `post_selections` (D-S2-12 §0 — those batches are `reviewing`/`cancelled`
+ * and have no `scheduled_posts` rows yet).
  */
-const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+type ScheduledCounts = {
+  totalLivePosts: number;
+  counts: { facebook: number; instagram: number; linkedin: number };
+};
+
+async function loadScheduledCounts(
+  batchIds: string[]
+): Promise<Map<string, ScheduledCounts>> {
+  const countsByBatch = new Map<string, ScheduledCounts>();
+  for (const id of batchIds) {
+    countsByBatch.set(id, {
+      totalLivePosts: 0,
+      counts: { facebook: 0, instagram: 0, linkedin: 0 },
+    });
+  }
+
+  if (batchIds.length === 0) return countsByBatch;
+
+  // Per-`(batchId, platform)` count of live (pending) scheduled rows. Join
+  // path: scheduled_posts.postId → posts.id → posts.batchId. There is no
+  // direct scheduled_posts.batchId column.
+  const platformRows = await db
+    .select({
+      batchId: posts.batchId,
+      platform: scheduledPosts.platform,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(scheduledPosts)
+    .innerJoin(posts, eq(scheduledPosts.postId, posts.id))
+    .where(
+      and(
+        inArray(posts.batchId, batchIds),
+        eq(scheduledPosts.status, "pending")
+      )
+    )
+    .groupBy(posts.batchId, scheduledPosts.platform);
+
+  for (const row of platformRows) {
+    // Defensive: posts.batchId is non-null at the schema level, but the join
+    // projection types it as nullable. Skip the (impossible) null case rather
+    // than assert with `!`.
+    if (!row.batchId) continue;
+    const bucket = countsByBatch.get(row.batchId);
+    if (!bucket) continue;
+    if (row.platform === "facebook") bucket.counts.facebook = row.count;
+    else if (row.platform === "instagram") bucket.counts.instagram = row.count;
+    else if (row.platform === "linkedin") bucket.counts.linkedin = row.count;
+  }
+
+  // Per-batch `COUNT(DISTINCT postId)` of live scheduled rows. A post
+  // scheduled to FB+IG+LI contributes 3 to the per-platform counts above but
+  // 1 to this total — which matches what the `{N} posts` link should display.
+  const distinctRows = await db
+    .select({
+      batchId: posts.batchId,
+      total: sql<number>`count(distinct ${scheduledPosts.postId})::int`,
+    })
+    .from(scheduledPosts)
+    .innerJoin(posts, eq(scheduledPosts.postId, posts.id))
+    .where(
+      and(
+        inArray(posts.batchId, batchIds),
+        eq(scheduledPosts.status, "pending")
+      )
+    )
+    .groupBy(posts.batchId);
+
+  for (const row of distinctRows) {
+    if (!row.batchId) continue;
+    const bucket = countsByBatch.get(row.batchId);
+    if (!bucket) continue;
+    bucket.totalLivePosts = row.total;
+  }
+
+  return countsByBatch;
+}
 
 /**
- * Milliseconds per day. Used only for the day-offset fallback when a post
- * exists but has no `scheduled_posts` row yet (Stage-1 batches before
- * Phase-4's `scheduleService.create` runs).
- */
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Data bundle for the Scheduled page (Stage-2 rewrite — D-S2-11, D-S2-12).
+ * Data bundle for the Scheduled page (Stage-2 rewrite — D-S2-11, D-S2-12,
+ * plus the Cancel-vs-Delete contract at §0).
  *
  * Returns the user's rolling-4 batches: at most 4 rows in
  * `status IN ('scheduling', 'completed')`, sorted `createdAt DESC` so the
@@ -461,27 +555,34 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * rolling-4 eviction enforces the cap upstream, so this read just trusts
  * `LIMIT 4`.
  *
- * Each `BatchBoxData` carries a `days[]` array describing the 7-day strip:
- *  - One cell per `posts.postOrder` 1..7 (no compaction; cancelled slots
- *    remain in place).
- *  - `status='scheduled'` when a `posts` row exists for that ordinal.
- *  - `status='cancelled'` when the post row is gone (per-post cancel or the
- *    user de-selected before scheduling).
- *  - `status='posted'` is reserved for Phase 7 — Stage-2 never produces it.
- *  - `date` is the earliest `scheduled_posts.scheduledTime` per post; falls
- *    back to `batch.createdAt + (ordinal - 1) days` when no schedule row
- *    exists yet.
+ * `BatchBoxData.totalPosts` and `BatchBoxData.counts.*` are LIVE counts
+ * derived from `scheduled_posts` filtered to `status='pending'` (see
+ * {@link loadScheduledCounts}). This REPLACES the Wave-4 use of
+ * {@link loadSelectionCounts} for the /schedule grid — `loadSelectionCounts`
+ * still powers `/create` cards because those batches are `reviewing` or
+ * `cancelled` and have no `scheduled_posts` rows. Cancelled rows in
+ * `scheduled_posts` are treated as absent so the box reflects what will
+ * actually publish (§5.3, §6.7 of the spec).
+ *
+ * **Production reality.** `scheduled_posts` has no writer until the Phase-4
+ * cron lands; until then every count will read 0. That is correct under the
+ * new contract — once the writer ships, the counts become real with no
+ * further code change.
+ *
+ * `BatchBoxData` does NOT carry a `days[]` field (Wave-4 corrections at §0,
+ * D-S2-12). The per-day / per-network view lives on `/schedule/[batchId]`
+ * as a network × day grid (D-S2-15), fed by an independent data path that is
+ * not affected by this function.
  *
  * Stage-1 dormant fields (`derivedState`, `alreadyPostedCount`, `queuedCount`)
  * still default to the safe values documented on {@link BatchBoxData} — Phase
  * 4/7 will compute real values without touching this function's signature.
  *
- * Query plan (3 queries, no N+1):
+ * Query plan (2 queries when batches exist; 1 when not):
  *  1. Top-4 batches by `createdAt DESC` filtered to `status IN ('scheduling',
  *     'completed')` for `userId`.
- *  2. Per-network selection counts via {@link loadSelectionCounts}.
- *  3. Posts + earliest `scheduledPosts.scheduledTime` per post (left-joined,
- *     grouped by post) for the same batch ids.
+ *  2. {@link loadScheduledCounts} — per-network `pending` counts + distinct
+ *     `pending` post count for the same batch ids.
  *
  * `scheduledBatchCount` is set from `current.length` — see the `ScheduledView`
  * docblock for the rationale (rolling-4 invariant is enforced upstream).
@@ -497,7 +598,6 @@ export async function getScheduledViewForUser(
       id: weeklyBatches.id,
       theme: weeklyBatches.theme,
       importantThing: weeklyBatches.importantThing,
-      totalPosts: weeklyBatches.totalPosts,
       status: weeklyBatches.status,
       ordinal: weeklyBatches.batchOrdinalInPeriod,
       createdAt: weeklyBatches.createdAt,
@@ -520,89 +620,32 @@ export async function getScheduledViewForUser(
 
   const batchIds = rows.map((r) => r.id);
 
-  // Per-batch network counts (reuses the existing private helper — it
-  // pre-seeds every batch id with `{ facebook: 0, instagram: 0, linkedin: 0 }`
-  // so the lookup below never needs a nullish fallback at runtime).
-  const countsByBatch = await loadSelectionCounts(batchIds);
-
-  // One query for posts + earliest scheduled time per post. A post can have
-  // 1–3 `scheduled_posts` rows (one per selected network); `MIN(scheduledTime)`
-  // collapses them to the earliest. `leftJoin` keeps posts that don't yet
-  // have schedule rows (Stage-1 batches before Phase-4's `scheduleService`)
-  // — `earliestScheduledTime` is `null` for those and the fallback date below
-  // takes over.
-  const postRows = await db
-    .select({
-      batchId: posts.batchId,
-      postId: posts.id,
-      postOrder: posts.postOrder,
-      earliestScheduledTime: sql<
-        Date | null
-      >`MIN(${scheduledPosts.scheduledTime})`,
-    })
-    .from(posts)
-    .leftJoin(scheduledPosts, eq(scheduledPosts.postId, posts.id))
-    .where(inArray(posts.batchId, batchIds))
-    .groupBy(posts.batchId, posts.id, posts.postOrder);
-
-  // Index posts by batch → postOrder so the days[] build below is O(1) per
-  // ordinal rather than O(n) over the flat row list.
-  const postsByBatch = new Map<string, Map<number, { date: Date | null }>>();
-  for (const id of batchIds) {
-    postsByBatch.set(id, new Map());
-  }
-  for (const p of postRows) {
-    // Defensive: posts.batchId is non-null at the schema level, but the
-    // projection types it as nullable. Skip the (impossible) null case
-    // rather than assert with `!`.
-    if (!p.batchId) continue;
-    const bucket = postsByBatch.get(p.batchId);
-    if (!bucket) continue;
-    bucket.set(p.postOrder, { date: p.earliestScheduledTime ?? null });
-  }
+  // Per-batch live counts under the Cancel-vs-Delete contract (§0). Pre-seeded
+  // for every requested id so the lookup below never needs a nullish fallback.
+  // Replaces the Wave-4 loadSelectionCounts call for /schedule — see this
+  // function's docblock.
+  const scheduledByBatch = await loadScheduledCounts(batchIds);
 
   const current: BatchBoxData[] = rows.map((r) => {
-    const postMap = postsByBatch.get(r.id) ?? new Map();
-
-    const days: BatchBoxData["days"] = [];
-    for (let ordinal = 1; ordinal <= 7; ordinal++) {
-      const entry = postMap.get(ordinal);
-      // Fallback when no `scheduled_posts` row exists for a still-extant
-      // post: lay the strip out as `batch.createdAt + (ordinal - 1) days`.
-      // Purely cosmetic — task-13's <SevenDayStrip /> only reads `date` for
-      // the weekday label.
-      const fallback = new Date(
-        r.createdAt.getTime() + (ordinal - 1) * DAY_MS
-      );
-      const date = entry?.date ?? fallback;
-      // Stage-2 binary: post row present ⇒ scheduled, missing ⇒ cancelled.
-      // `'posted'` is Phase-7 only and never produced here.
-      const status: "scheduled" | "cancelled" | "posted" = entry
-        ? "scheduled"
-        : "cancelled";
-      days.push({
-        label: WEEKDAY_LABELS[date.getDay()] ?? "",
-        date,
-        status,
-      });
-    }
+    const liveCounts = scheduledByBatch.get(r.id) ?? {
+      totalLivePosts: 0,
+      counts: { facebook: 0, instagram: 0, linkedin: 0 },
+    };
 
     return {
       id: r.id,
       ordinal: r.ordinal,
       theme: r.theme,
       importantThing: r.importantThing,
-      totalPosts: r.totalPosts,
-      counts: countsByBatch.get(r.id) ?? {
-        facebook: 0,
-        instagram: 0,
-        linkedin: 0,
-      },
+      // Live post count derived from scheduled_posts (status='pending'),
+      // NOT the nominal weeklyBatches.totalPosts column — see the field's
+      // docblock for the rationale.
+      totalPosts: liveCounts.totalLivePosts,
+      counts: liveCounts.counts,
       // Stage-1 dormant defaults unchanged — Phase 4/7 still owns the flip.
       derivedState: "upcoming" as const,
       alreadyPostedCount: 0,
-      queuedCount: r.totalPosts,
-      days,
+      queuedCount: liveCounts.totalLivePosts,
     };
   });
 
@@ -1325,31 +1368,56 @@ export async function stopBatch(
   }
 }
 
+// =============================================================================
+// Per-post Cancel / Restore (D-S2-6, D-S2-7, D-S2-21 — non-destructive status
+// flips on `scheduled_posts`). See the Cancel-vs-Delete contract at §0 of the
+// Stage-2 spec.
+// =============================================================================
+
 /**
- * Hard-delete one post with image preservation (Stage-2 D-S2-6, D-S2-7).
+ * Networks a `scheduled_posts` row may target. Reused by {@link cancelPost} +
+ * {@link restorePost} for the optional per-network scope. UI in Stage-2 only
+ * calls these without `platform` (whole-post scope); the per-network entry
+ * point is reserved for a later UI spec.
+ */
+type ScheduledPostPlatform = "facebook" | "instagram" | "linkedin";
+
+/**
+ * Cancel a post by flipping `scheduled_posts.status` from `'pending'` to
+ * `'cancelled'` over the chosen scope (Stage-2 D-S2-6, D-S2-7).
  *
- * Order is invariant:
- *   1. Read post (ownership gate).
- *   2. Read scheduled_posts rows (availability gate).
- *   3. Preserve images to library (image-service handles ordering + lock).
- *   4. DELETE posts row (cascade cleans post_images, post_variations,
- *      post_selections, scheduled_posts).
+ * **Non-destructive.** The post family (`posts`, `post_variations`,
+ * `post_selections`, `post_images`) is preserved — only the live schedule rows
+ * flip. The image stays attached because the post still exists, so there is
+ * NO call to `imageService.retainImagesToLibrary` and the image blob is not
+ * touched. Reversible via {@link restorePost} (D-S2-21). True destruction is
+ * the reserved future `deletePost` (D-S2-22) — see the reservation block above
+ * {@link deleteBatchForever}.
  *
- * The image blob stays alive — `library_images.imageUrl` now owns it. The
- * `post_images` row vanishes via cascade, but the URL was already copied into
- * the library before the cascade fired.
+ * **Scope.** When `platform` is omitted, every `'pending'` `scheduled_posts`
+ * row for `postId` flips — the whole-post cancel surfaced in Stage-2 UI. When
+ * `platform` is supplied, only that one network's row flips — service-layer
+ * support for a future per-network UI affordance (D-S2-6 §0).
  *
- * Availability gate (D-S2-7) rejects with `already_posted` when:
- *  - the post has zero `scheduled_posts` rows (never scheduled), OR
+ * **Order:**
+ *   1. Read post (ownership gate — `not_found` / `not_owned`).
+ *   2. Read scheduled_posts rows in scope (availability gate D-S2-7).
+ *   3. UPDATE scheduled_posts SET status='cancelled' WHERE postId = ?
+ *      AND status='pending' (plus `AND platform = ?` when supplied).
+ *      Returning the affected ids → `cancelledCount`.
+ *
+ * **Availability gate (D-S2-7)** rejects with `already_posted` when, in scope:
+ *  - there is zero `scheduled_posts` rows, OR
  *  - any `scheduled_posts` row has `status='posted'`, OR
- *  - all `scheduled_posts` rows have `scheduledTime <= now()` (nothing future
- *    to cancel).
+ *  - no `scheduled_posts` row has `scheduledTime > now()` AND
+ *    `status='pending'` (nothing future left to cancel).
  *
  * The `.some()` checks happen JS-side so we don't need `or` from drizzle.
  */
 export async function cancelPost(
   sessionUserId: string,
-  postId: string
+  postId: string,
+  platform?: ScheduledPostPlatform
 ): Promise<CancelPostResult> {
   // 1. Ownership gate.
   const [post] = await db
@@ -1366,60 +1434,205 @@ export async function cancelPost(
     return { ok: false, error: "not_owned" };
   }
 
-  // 2. Availability gate (D-S2-7): at least one future-scheduled row AND no
-  // posted row. Zero rows is also treated as `already_posted` — the UI only
-  // surfaces the cancel action for scheduled posts, so this is a defensive
-  // fallback rather than a user-reachable path.
+  // 2. Availability gate (D-S2-7) over the chosen scope: at least one pending
+  // row with scheduledTime > now() AND no posted row. Zero rows in scope is
+  // also treated as `already_posted` — the UI only surfaces the cancel action
+  // for scheduled posts, so this is a defensive fallback rather than a
+  // user-reachable path.
+  const scopeFilter = platform
+    ? and(
+        eq(scheduledPosts.postId, postId),
+        eq(scheduledPosts.platform, platform)
+      )
+    : eq(scheduledPosts.postId, postId);
+
   const scheduleRows = await db
     .select({
       status: scheduledPosts.status,
       scheduledTime: scheduledPosts.scheduledTime,
     })
     .from(scheduledPosts)
-    .where(eq(scheduledPosts.postId, postId));
+    .where(scopeFilter);
 
   const now = Date.now();
   const anyPosted = scheduleRows.some((r) => r.status === "posted");
-  const anyFuture = scheduleRows.some(
-    (r) => r.scheduledTime.getTime() > now
+  const anyFuturePending = scheduleRows.some(
+    (r) => r.status === "pending" && r.scheduledTime.getTime() > now
   );
 
-  if (scheduleRows.length === 0 || anyPosted || !anyFuture) {
+  if (scheduleRows.length === 0 || anyPosted || !anyFuturePending) {
     return { ok: false, error: "already_posted" };
   }
 
-  // 3. Preserve images. image-service enforces ownership again as defense in
-  // depth and handles the per-user advisory lock for the 30-image cap.
-  const retain = await imageService.retainImagesToLibrary(sessionUserId, [
-    postId,
-  ]);
-  if (!retain.ok) {
-    // `not_owned` here would indicate a race we already screened for — bubble
-    // up the same error code for the UI toast.
-    return { ok: false, error: retain.error };
-  }
-
-  // 4. Hard-delete. Cascade fires. The `userId = sessionUserId` clause is
-  // defense in depth against a TOCTOU race between the ownership read above
-  // and this DELETE.
+  // 3. Non-destructive status flip. No DELETE, no cascade, no image movement.
+  // The `userId = sessionUserId` clause is defense in depth against a TOCTOU
+  // race between the ownership read above and this UPDATE.
   try {
+    const updateWhere = platform
+      ? and(
+          eq(scheduledPosts.postId, postId),
+          eq(scheduledPosts.userId, sessionUserId),
+          eq(scheduledPosts.status, "pending"),
+          eq(scheduledPosts.platform, platform)
+        )
+      : and(
+          eq(scheduledPosts.postId, postId),
+          eq(scheduledPosts.userId, sessionUserId),
+          eq(scheduledPosts.status, "pending")
+        );
+
     const result = await db
-      .delete(posts)
-      .where(and(eq(posts.id, postId), eq(posts.userId, sessionUserId)))
-      .returning({ id: posts.id });
+      .update(scheduledPosts)
+      .set({ status: "cancelled" })
+      .where(updateWhere)
+      .returning({ id: scheduledPosts.id });
 
     if (result.length === 0) {
-      // Lost a race — another request deleted the post between our ownership
-      // read and our DELETE. Idempotent outcome: nothing to do.
-      return { ok: false, error: "not_found" };
+      // Lost a race — another request flipped or posted the row(s) between
+      // the gate above and this UPDATE. Mirror the gate's signal.
+      return { ok: false, error: "already_posted" };
     }
 
-    return { ok: true, batchId: post.batchId };
+    return {
+      ok: true,
+      batchId: post.batchId,
+      cancelledCount: result.length,
+    };
   } catch (err) {
     console.error("[postService.cancelPost]", err);
     return { ok: false, error: "db_failed" };
   }
 }
+
+/**
+ * Symmetric un-cancel for {@link cancelPost} (Stage-2 D-S2-21). Flips
+ * `scheduled_posts.status` from `'cancelled'` back to `'pending'` over the
+ * chosen scope, reversing a prior cancel.
+ *
+ * **No row insert, no image movement.** The `scheduled_posts` entries already
+ * exist with their original `scheduledTime`s; restore just reverses the
+ * status flip. The image stayed attached through the cancel, so the post
+ * reappears in the network × day grid and the per-network counts without
+ * any backing-data change beyond the status column.
+ *
+ * **Scope** mirrors {@link cancelPost}: omit `platform` to restore every
+ * `'cancelled'` row for the post; supply `platform` to restore just that
+ * network's row.
+ *
+ * **Order:**
+ *   1. Read post (ownership gate — `not_found` / `not_owned`).
+ *   2. Read scheduled_posts rows in scope (availability gate).
+ *   3. UPDATE scheduled_posts SET status='pending' WHERE postId = ?
+ *      AND status='cancelled' (plus `AND platform = ?` when supplied).
+ *      Returning the affected ids → `restoredCount`.
+ *
+ * **Availability gate** rejects with `not_restorable` when, in scope:
+ *  - there is zero `scheduled_posts` rows, OR
+ *  - any `scheduled_posts` row has `status='posted'`, OR
+ *  - no `'cancelled'` row has `scheduledTime > now()` (nothing future left
+ *    to restore).
+ */
+export async function restorePost(
+  sessionUserId: string,
+  postId: string,
+  platform?: ScheduledPostPlatform
+): Promise<RestorePostResult> {
+  // 1. Ownership gate.
+  const [post] = await db
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+    })
+    .from(posts)
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!post) return { ok: false, error: "not_found" };
+  if (post.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // 2. Availability gate: at least one future-scheduled 'cancelled' row in
+  // scope AND no 'posted' row in scope.
+  const scopeFilter = platform
+    ? and(
+        eq(scheduledPosts.postId, postId),
+        eq(scheduledPosts.platform, platform)
+      )
+    : eq(scheduledPosts.postId, postId);
+
+  const scheduleRows = await db
+    .select({
+      status: scheduledPosts.status,
+      scheduledTime: scheduledPosts.scheduledTime,
+    })
+    .from(scheduledPosts)
+    .where(scopeFilter);
+
+  const now = Date.now();
+  const anyPosted = scheduleRows.some((r) => r.status === "posted");
+  const anyFutureCancelled = scheduleRows.some(
+    (r) => r.status === "cancelled" && r.scheduledTime.getTime() > now
+  );
+
+  if (scheduleRows.length === 0 || anyPosted || !anyFutureCancelled) {
+    return { ok: false, error: "not_restorable" };
+  }
+
+  // 3. Symmetric status flip. The `userId = sessionUserId` clause is defense
+  // in depth against a TOCTOU race between the ownership read above and
+  // this UPDATE.
+  try {
+    const updateWhere = platform
+      ? and(
+          eq(scheduledPosts.postId, postId),
+          eq(scheduledPosts.userId, sessionUserId),
+          eq(scheduledPosts.status, "cancelled"),
+          eq(scheduledPosts.platform, platform)
+        )
+      : and(
+          eq(scheduledPosts.postId, postId),
+          eq(scheduledPosts.userId, sessionUserId),
+          eq(scheduledPosts.status, "cancelled")
+        );
+
+    const result = await db
+      .update(scheduledPosts)
+      .set({ status: "pending" })
+      .where(updateWhere)
+      .returning({ id: scheduledPosts.id });
+
+    if (result.length === 0) {
+      // Lost a race — another request flipped or posted the row(s) between
+      // the gate above and this UPDATE. Mirror the gate's signal.
+      return { ok: false, error: "not_restorable" };
+    }
+
+    return {
+      ok: true,
+      batchId: post.batchId,
+      restoredCount: result.length,
+    };
+  } catch (err) {
+    console.error("[postService.restorePost]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+// =============================================================================
+// RESERVED — deletePost (D-S2-22, future spec).
+//
+// `postService.deletePost(sessionUserId, postId)` is the reserved-future
+// destructive per-post action. NOT implemented in Stage-2. When built, it will:
+//   1. Call imageService.retainImagesToLibrary(...) to move the image to the
+//      Library (same retain-then-delete pattern as deleteBatchForever).
+//   2. DELETE FROM posts WHERE id = postId AND userId = sessionUserId — cascade
+//      fires.
+// It is the path that will later trigger AI per-network regeneration.
+//
+// Reserved here so no destructive cancel path slips in under another name.
+// See specs/scheduled-and-create-redesign-stage-2/spec.md D-S2-22 + §8.
+// =============================================================================
 
 // =============================================================================
 // deleteBatchForever — hard-delete a cancelled batch with image preservation

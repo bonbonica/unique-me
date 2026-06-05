@@ -469,7 +469,9 @@ export const scheduledPosts = pgTable(
     // Union: "facebook" | "instagram" | "linkedin".
     platform: text("platform").notNull(),
     scheduledTime: timestamp("scheduled_time").notNull(),
-    // Union: "pending" | "posted" | "failed".
+    // Union: "pending" | "posted" | "failed" | "cancelled". The "cancelled"
+    // value is set only by postService.cancelPost (D-S2-6, spec) and reversed
+    // by postService.restorePost (D-S2-21).
     status: text("status").notNull(),
     retryCount: integer("retry_count").default(0).notNull(),
     postedAt: timestamp("posted_at"),
@@ -577,7 +579,11 @@ export type PostLength = "short" | "medium" | "long";
 export type SubscriptionStatus = "trial" | "active" | "cancelled" | "expired";
 export type BillingCycle = "monthly" | "yearly";
 export type ConnectedAccountStatus = "active" | "expired" | "disconnected";
-export type ScheduledPostStatus = "pending" | "posted" | "failed";
+export type ScheduledPostStatus =
+  | "pending"
+  | "posted"
+  | "failed"
+  | "cancelled";
 export type PostLogAction =
   | "posted"
   | "failed"
