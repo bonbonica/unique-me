@@ -92,8 +92,8 @@ export function WizardSummary({
   const subheadText = isCancelled
     ? "Confirm to bring this batch back to scheduled."
     : "Confirm to schedule.";
-  const ctaText = isCancelled ? "Re-schedule" : "Schedule my pick";
-  const submittingText = isCancelled ? "Re-scheduling…" : "Scheduling…";
+  const ctaText = isCancelled ? "Schedule" : "Schedule my pick";
+  const submittingText = "Scheduling…";
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

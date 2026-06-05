@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
+import { cn } from "@/lib/utils";
 
 /**
  * Per-network step. Renders one card per post in this platform's preview
@@ -148,7 +149,11 @@ export function WizardStep({
           <Button
             type="button"
             size="lg"
-            className="rounded-full gap-2"
+            className={cn(
+              "rounded-full gap-2",
+              selectedCount > 0 &&
+                "bg-[#bd955c] hover:bg-[#bd955c] dark:bg-primary dark:hover:bg-primary/90"
+            )}
             onClick={handleBulkClick}
             aria-label={
               isAllSelected
@@ -157,7 +162,7 @@ export function WizardStep({
             }
           >
             <CheckSquare
-              className={`size-4 ${isAllSelected ? "text-destructive" : ""}`}
+              className={`size-4 ${isAllSelected ? "text-[#dc3030]" : ""}`}
               aria-hidden
             />
             {bulkLabel}

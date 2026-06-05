@@ -19,12 +19,17 @@ type Props = {
  * boundary in the same file would force the whole card client-side and lose
  * the server-render benefit.
  *
- * Per DESIGN.md §9 there is no `destructive-ghost` button variant — we
- * compose `variant="ghost"` + `text-destructive hover:bg-destructive/10`
- * (mirrors the DropdownMenu destructive-item pattern). The destructive
- * action sits to the LEFT of the primary champagne CTA so the primary
- * action retains right-edge prominence per DESIGN.md §1 (single primary
- * CTA per surface) and §9.
+ * Per DESIGN.md §9 there is no `destructive-ghost` button variant. The trigger
+ * is composed as a champagne-outlined sibling to the primary CTA — same
+ * `size="sm"` for guaranteed height parity, transparent background so the
+ * card surface shows through, and `border-primary/40` mirroring the
+ * `secondary` variant's beige hairline (DESIGN.md §9). The red lives in the
+ * text + icon only, using the explicit hex values specified in the Fix 1a
+ * brief (lighter `#f26b6b` at rest, darker `#dc3030` on hover) — the
+ * `text-destructive` token reads too washed-out on the midnight card. The
+ * destructive action sits to the LEFT of the primary champagne CTA so the
+ * primary action retains right-edge prominence per DESIGN.md §1 (single
+ * primary CTA per surface) and §9.
  */
 export function DeleteBatchForeverTrigger({ batchId, imageCount }: Props) {
   const [open, setOpen] = useState(false);
@@ -36,7 +41,7 @@ export function DeleteBatchForeverTrigger({ batchId, imageCount }: Props) {
         variant="ghost"
         size="sm"
         onClick={() => setOpen(true)}
-        className="text-destructive hover:bg-destructive/10"
+        className="border border-primary/40 bg-transparent text-[#f26b6b] hover:bg-transparent hover:text-[#dc3030]"
       >
         Delete forever
       </Button>
