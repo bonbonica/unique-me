@@ -6,9 +6,15 @@ not started
 ## Wave
 5
 
+## Re-issue note
+
+This task file was re-issued alongside task-15 after the Stage-2 spec update introduced the Cancel-vs-Delete contract (§0, D-S2-6 / D-S2-22). Architecturally the Library page is unchanged. The only edits are (a) empty-state copy that acknowledges the post-Wave-4.5 reality — per-post `cancelPost` no longer feeds the Library, only `deleteBatchForever` does today — and (b) a cross-reference to the reserved future `deletePost` (D-S2-22), which will be the per-post path that fills the Library when it ships.
+
 ## Description
 
 Replace the Stage-1 `/library` placeholder ("Coming soon") with the real Image Library: a server-rendered responsive grid of the user's `library_images` rows (newest first), header showing `{N}/30 images`, per-tile destructive delete with confirm dialog. Empty state when the user has no images yet. Wires `imageService.listLibrary` for the read and `imageService.deleteLibraryImage` via a server action for the delete.
+
+**Library inputs at task land.** Only `deleteBatchForever` populates `library_images` in Stage-2 (per D-S2-8). Per-post `cancelPost` does NOT feed the Library — it's non-destructive and preserves the image attached to the post (D-S2-6 / §0 Cancel-vs-Delete contract). The future destructive per-post `deletePost` (D-S2-22) is reserved but NOT built in Stage-2; when it ships it will be the second input. Most users will see the empty state for a while; the copy is written so that fact reads as design intent, not a bug.
 
 ## Dependencies
 
@@ -92,7 +98,8 @@ export default async function LibraryPage() {
 
       {images.length === 0 ? (
         <p className="text-base text-muted-foreground leading-7">
-          No images yet.
+          No images yet. Images move to your library when you delete a
+          cancelled batch.
         </p>
       ) : (
         <LibraryGrid images={images} />
@@ -256,7 +263,7 @@ export function LibraryImageDeleteDialog({
 
 ### 6. Empty state
 
-When `listLibrary` returns `[]`, render a single line `"No images yet."` in muted foreground at body size. No CTA — images arrive via cancel/delete-forever flows, not a direct action on this page. The empty state is intentionally quiet.
+When `listLibrary` returns `[]`, render the two-sentence empty state `"No images yet. Images move to your library when you delete a cancelled batch."` in muted foreground at body size. No CTA — images arrive via the `deleteBatchForever` flow on `/create` (per-post `cancelPost` does NOT feed the Library — see §0 Cancel-vs-Delete contract), and direct upload is out of scope (§8). The empty state is intentionally quiet, but the second sentence makes it obvious *why* the cap is rarely hit today, so the page doesn't read as broken to a user who never deletes batches.
 
 ## Acceptance Criteria
 
@@ -267,7 +274,7 @@ When `listLibrary` returns `[]`, render a single line `"No images yet."` in mute
 - [ ] Hover/focus reveals the `[Delete]` button overlay; clicking opens `<LibraryImageDeleteDialog />`.
 - [ ] Confirm calls `deleteLibraryImageAction`; on success: toast `"Image deleted."`, page revalidates, tile disappears.
 - [ ] On `not_found` error: toast `"Image was already removed."`, dialog closes, page revalidates.
-- [ ] Empty state shows `"No images yet."` only (no CTA).
+- [ ] Empty state shows the two-sentence copy `"No images yet. Images move to your library when you delete a cancelled batch."` only (no CTA).
 - [ ] Cap copy: header reads `0/30 images` when empty, `30/30 images` at cap.
 - [ ] `pnpm lint`, `pnpm typecheck`, `pnpm build:ci` exit 0.
 
@@ -278,6 +285,7 @@ When `listLibrary` returns `[]`, render a single line `"No images yet."` in mute
 - `imageService.listLibrary` returns rows ordered by `createdAt DESC`. Stage-2 doesn't expose a sort control; if added later it goes through the service, not the page.
 - Hover-reveal on the delete button is fine on touch devices because Sonner toasts still surface the action result. If the design team wants always-visible delete on touch later, swap the overlay class — no component change needed.
 - The `next/image` `fill` layout requires the parent to be `position: relative` (the `relative` class on the tile satisfies that).
+- **D-S2-22 cross-reference for future implementers.** `postService.deletePost(sessionUserId, postId)` is reserved (D-S2-22) but NOT built in Stage-2. When it ships in a later spec, it will (a) call `imageService.retainImagesToLibrary` then `DELETE FROM posts` with cascade, and (b) become the second input that fills `library_images` (alongside `deleteBatchForever`). Do not add a per-post delete-image-from-Library-back-to-a-post flow, a direct upload UI, or a "send to library" affordance on a single post — all three are out of scope for this task and the next implementer should leave them out until D-S2-22 ships.
 
 ## Out of scope
 
