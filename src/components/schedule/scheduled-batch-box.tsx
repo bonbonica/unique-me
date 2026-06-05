@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import type { BatchBoxData } from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
+import { SevenDayStrip } from "./seven-day-strip";
 
 type Props = {
   data: BatchBoxData;
@@ -47,7 +49,11 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
         {label}
       </header>
 
-      <div className="p-6 space-y-5">
+      <div className="px-6 pt-5 pb-1">
+        <SevenDayStrip days={data.days} />
+      </div>
+
+      <div className="p-6 pt-2 space-y-5">
         <div>
           <p className="text-base text-foreground leading-7">{data.theme}</p>
           <p className="mt-1 text-sm text-muted-foreground">
@@ -63,9 +69,12 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
             <span aria-hidden="true">·</span>
             <NetworkCount label="LI" count={data.counts.linkedin} />
           </div>
-          <span className="text-foreground font-medium">
+          <Link
+            href={`/schedule/${data.id}`}
+            className="text-foreground font-medium hover:underline underline-offset-4 decoration-primary/60"
+          >
             {data.totalPosts} posts
-          </span>
+          </Link>
         </div>
 
         <div className="flex justify-end">

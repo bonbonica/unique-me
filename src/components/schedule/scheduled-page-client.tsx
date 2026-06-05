@@ -6,14 +6,8 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ScheduledView } from "@/lib/services/post-service";
 import { CancelBatchDialog } from "./cancel-batch-dialog";
+import { CreateNextBatchCta } from "./create-next-batch-cta";
 import { ScheduledBatchBox } from "./scheduled-batch-box";
-
-// TODO(task-11): Stage-2 task-11 rewrites this client into the 2x2 grid plus
-// the `<CreateNextBatchCta />` above it. The wrapper below is the minimum
-// patch needed to keep Wave-1 typecheck green after task-02 dropped
-// `view.past` / `periodStartDate` / `periodEndsAt` from `ScheduledView` and
-// killed the `<PastBatchesList />` surface (per spec §5.3 — kill dead
-// surface). Re-evaluate the cancel-dialog wiring during task-11.
 
 type Props = { view: ScheduledView };
 
@@ -62,22 +56,28 @@ export function ScheduledPageClient({ view }: Props) {
 
   return (
     <>
-      <section className="space-y-6" aria-label="Current period batches">
-        {view.current.map((batch) => (
-          <ScheduledBatchBox
-            key={batch.id}
-            data={batch}
-            onCancelClick={() =>
-              setCancelTarget({
-                id: batch.id,
-                totalPosts: batch.totalPosts,
-                alreadyPostedCount: batch.alreadyPostedCount,
-                queuedCount: batch.queuedCount,
-              })
-            }
-          />
-        ))}
-      </section>
+      <div className="space-y-8">
+        <CreateNextBatchCta scheduledBatchCount={view.scheduledBatchCount} />
+        <section
+          className="grid grid-cols-1 md:grid-cols-2 gap-6"
+          aria-label="Current period batches"
+        >
+          {view.current.map((batch) => (
+            <ScheduledBatchBox
+              key={batch.id}
+              data={batch}
+              onCancelClick={() =>
+                setCancelTarget({
+                  id: batch.id,
+                  totalPosts: batch.totalPosts,
+                  alreadyPostedCount: batch.alreadyPostedCount,
+                  queuedCount: batch.queuedCount,
+                })
+              }
+            />
+          ))}
+        </section>
+      </div>
 
       {cancelTarget && (
         <CancelBatchDialog
