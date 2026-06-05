@@ -27,23 +27,22 @@ import { cn } from "@/lib/utils";
  * top-of-file rationale). This component is purely presentational — it
  * reads from `selections` for each card's checked state and per-step
  * count, and calls the parent's `onSetSelection` /
- * `onSelectAllForPlatform` / `onAdvance` callbacks for user actions.
+ * `onSelectAllForPlatform` / `onDeselectAllForPlatform` callbacks for
+ * user actions.
  *
  * Bulk-button behavior (the user-spec for this step):
  *   - 0 selected           → label "Schedule all {Network} posts" →
  *                            bulk-select all N on the client (server
- *                            catches up via onSelectAllForPlatform) AND
- *                            advance to the next step.
- *   - 1 .. N-1 selected    → label "Schedule my pick" → just advance
- *                            (current selections persist).
- *   - all N selected       → label "Schedule all {Network} posts" → just
- *                            advance (no select-all needed; everything
- *                            is already in).
+ *                            catches up via onSelectAllForPlatform).
+ *   - 1 .. N-1 selected    → label "{count} {Network} posts scheduled"
+ *                            → no-op (status display; user keeps ticking
+ *                            checkboxes or clicks Next).
+ *   - all N selected       → label "N {Network} posts scheduled" →
+ *                            deselects all N (undo).
  *
- * The button does NOT commit the batch. Committing happens once, on the
- * summary step. The wording on this button is intentionally aspirational
- * ("Schedule…") because it represents the user's intent to send these
- * to summary — even though the final go/no-go is one more click away.
+ * The button never advances the wizard — the user moves between steps
+ * only via the WizardNav Back/Next buttons. It also does NOT commit the
+ * batch; committing happens once, on the summary step.
  */
 
 const NETWORK_ICON: Record<SelectionPlatform, ReactNode> = {
@@ -71,7 +70,6 @@ export function WizardStep({
   onSetSelection,
   onSelectAllForPlatform,
   onDeselectAllForPlatform,
-  onAdvance,
   mode,
 }: {
   platform: SelectionPlatform;
@@ -86,7 +84,6 @@ export function WizardStep({
   ) => void;
   onSelectAllForPlatform: (platform: SelectionPlatform) => void;
   onDeselectAllForPlatform: (platform: SelectionPlatform) => void;
-  onAdvance: () => void;
   mode: "reviewing" | "cancelled";
 }) {
   const selectedIds = selections[platform];
@@ -100,17 +97,16 @@ export function WizardStep({
    * (N = `totalPosts`, the batch's `totalPosts` column — 7 or 9):
    *
    *   - **0 selected** — label "Schedule all {Network} posts". Click
-   *     selects all N + advances to the next step. Icon inherits button
-   *     color.
+   *     selects all N. Icon inherits button color.
    *   - **1 .. N-1 selected** — label "{count} {Network} posts
-   *     scheduled". Click just advances. Icon inherits button color.
-   *     Label updates live as the user ticks individual checkboxes.
+   *     scheduled". Status display; click is a no-op. Label updates
+   *     live as the user ticks individual checkboxes.
    *   - **all N selected** — label "N {Network} posts scheduled". Icon
-   *     flips to destructive (orange/coral) signalling "all in — click
-   *     here to undo." Click DESELECTS all N and does NOT advance. This
-   *     is the key behavioural difference from the middle range: at the
-   *     all-in state, the button reverses the bulk action instead of
-   *     moving on.
+   *     flips to destructive (#dc3030) signalling "all in — click to
+   *     undo." Click DESELECTS all N.
+   *
+   * The button never advances the wizard. Step navigation happens only
+   * via the WizardNav Back/Next buttons.
    */
   let bulkLabel: string;
   if (selectedCount === 0) {
@@ -122,15 +118,12 @@ export function WizardStep({
   function handleBulkClick() {
     if (selectedCount === 0) {
       onSelectAllForPlatform(platform);
-      onAdvance();
     } else if (isAllSelected) {
       onDeselectAllForPlatform(platform);
-      // No advance — the destructive-coloured icon signals "click to
-      // undo," and the user landing back at 0/N here is the entire
-      // point of the action.
-    } else {
-      onAdvance();
     }
+    // Middle range (1..N-1): no-op. The button is a status display in
+    // this state — the user keeps ticking individual checkboxes or
+    // clicks Next to advance.
   }
 
   return (

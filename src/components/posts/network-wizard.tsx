@@ -212,7 +212,6 @@ export function NetworkWizard({
           onSetSelection={setSelection}
           onSelectAllForPlatform={selectAllForPlatform}
           onDeselectAllForPlatform={deselectAllForPlatform}
-          onAdvance={onNext}
           mode={mode}
         />
       ) : (
