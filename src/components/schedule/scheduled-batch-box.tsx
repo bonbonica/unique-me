@@ -26,6 +26,15 @@ type Props = {
 export function ScheduledBatchBox({ data, onCancelClick }: Props) {
   const tone = STATE_TONE[data.derivedState];
   const label = formatLabel(data.ordinal, tone.copyLabel);
+  // Total content pieces across networks. Unique copy per network means one
+  // day-slot can yield up to 3 posts (FB + IG + LI), so a 7-day batch can
+  // produce more than 7 posts. `data.totalPosts` is the nominal day count
+  // (`weeklyBatches.totalPosts`); `postsTotal` is the per-network sum from
+  // `post_selections` via `loadSelectionCounts`. Both numbers are shown so the
+  // user sees their day cadence AND their actual content count — see spec
+  // §6.7 / D-S2-14.
+  const postsTotal =
+    data.counts.facebook + data.counts.instagram + data.counts.linkedin;
 
   return (
     <article
@@ -50,8 +59,10 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
 
       <div className="p-6 space-y-5">
         <div>
-          <p className="text-base text-foreground leading-7">{data.theme}</p>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-base text-foreground leading-7 select-text cursor-text">
+            {data.theme}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground select-text cursor-text">
             {data.importantThing}
           </p>
         </div>
@@ -64,12 +75,20 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
             <span aria-hidden="true">·</span>
             <NetworkCount label="LI" count={data.counts.linkedin} />
           </div>
-          <Link
-            href={`/schedule/${data.id}`}
-            className="text-foreground font-medium hover:underline underline-offset-4 decoration-primary/60"
-          >
-            {data.totalPosts} posts
-          </Link>
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">
+              {data.totalPosts} days
+            </span>
+            <span className="text-muted-foreground" aria-hidden="true">
+              ·
+            </span>
+            <Link
+              href={`/schedule/${data.id}`}
+              className="text-foreground font-medium hover:underline underline-offset-4 decoration-primary/60"
+            >
+              {postsTotal} posts
+            </Link>
+          </div>
         </div>
 
         <div className="flex justify-end">
@@ -92,7 +111,7 @@ function NetworkCount({ label, count }: { label: string; count: number }) {
 
 function formatLabel(ordinal: number | null, stateLabel: string): string {
   return ordinal !== null
-    ? `BATCH ${ordinal} · ${stateLabel}`
+    ? `BATCH ${ordinal}/4 · ${stateLabel}`
     : `BATCH · ${stateLabel}`;
 }
 

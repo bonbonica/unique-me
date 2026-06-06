@@ -4,7 +4,12 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { BatchDetailView } from "@/components/schedule/batch-detail-view";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { posts, scheduledPosts, weeklyBatches } from "@/lib/schema";
+import {
+  posts,
+  postSelections,
+  postVariations,
+  weeklyBatches,
+} from "@/lib/schema";
 
 /**
  * Dynamic route `/schedule/[batchId]` — Stage-2 D-S2-15.
@@ -15,14 +20,19 @@ import { posts, scheduledPosts, weeklyBatches } from "@/lib/schema";
  *
  * Ownership is enforced at the `weekly_batches` lookup (`AND userId = ?`).
  * A foreign or unknown batchId falls through to `notFound()` (Next renders the
- * 404 boundary). The downstream `posts` / `scheduled_posts` reads inherit the
+ * 404 boundary). The downstream `posts` / `post_selections` reads inherit the
  * ownership guarantee from the batch lookup — they don't re-check userId
  * because the batch FK already constrains the data to the owning user.
  *
- * Reads live data so the page lights up automatically when the Phase-4 cron
- * writer lands. Until then, batches have no `scheduled_posts` rows in
- * production — the grid renders all-✗ and the per-network sections render
- * their neutral "No posts scheduled to {Network} yet." empty state.
+ * Reader source — PRESENT-DAY (option (b), per spec §5.3 PRESENT-DAY vs
+ * FUTURE-STATE). The page reads `post_selections` rather than
+ * `scheduled_posts` because no writer populates `scheduled_posts` today
+ * (Phase-4 cron deferred per spec §8). Row presence in `post_selections`
+ * answers "is this (postId, platform) scheduled?" — the same source `/create`
+ * and the `/schedule` boxes already use via `loadSelectionCounts`. When BOTH
+ * (a) a `scheduled_posts` writer ships and (b) the cancel UI is required, the
+ * reader swaps back — see the task-15 addendum and `<BatchDetailView />`
+ * docblock for the locked-in swap criteria.
  */
 export default async function BatchDetailPage({
   params,
@@ -53,19 +63,35 @@ export default async function BatchDetailPage({
     .where(eq(posts.batchId, batchId))
     .orderBy(asc(posts.postOrder));
 
+  // PRESENT-DAY reader (option (b)): `post_selections` rows answer "is this
+  // (postId, platform) scheduled?" today. No status filter — the table has
+  // no `status` column; row presence = selected. See docblock above.
+  //
+  // `post_variations` carries the per-network adapted text for Instagram /
+  // LinkedIn (the canonical Facebook caption lives on `posts.postText`). The
+  // detail page needs all three so each per-network section renders its real
+  // copy rather than the FB canonical for every row — mirrors the wizard's
+  // `getBatchForReview` fetch shape (post-service.ts:575-648).
   const postIds = postRows.map((p) => p.id);
-  const scheduledRows = postIds.length
-    ? await db
-        .select()
-        .from(scheduledPosts)
-        .where(inArray(scheduledPosts.postId, postIds))
-    : [];
+  const [selectionRows, variationRows] = postIds.length
+    ? await Promise.all([
+        db
+          .select()
+          .from(postSelections)
+          .where(inArray(postSelections.postId, postIds)),
+        db
+          .select()
+          .from(postVariations)
+          .where(inArray(postVariations.postId, postIds)),
+      ])
+    : [[], []];
 
   return (
     <BatchDetailView
       batch={batch}
       postRows={postRows}
-      scheduledRows={scheduledRows}
+      selectionRows={selectionRows}
+      variationRows={variationRows}
       now={new Date()}
     />
   );

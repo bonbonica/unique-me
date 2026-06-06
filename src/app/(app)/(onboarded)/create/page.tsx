@@ -19,14 +19,21 @@ import {
 /**
  * `/create` — the **Create Posts hub** (spec § 6.9, D-S2 / D-S14).
  *
- * Hub structure (one container, three vertical slots):
+ * Hub structure (one container, vertical slots):
  *
  *   1. Header — `"Create Posts"` (Fraunces) + optional `<TrialNote />`.
- *   2. `<UnscheduledBatchList />` — top buttons + stacked cards for any
- *      batches in `reviewing` / `cancelled`. Self-hides when there are
- *      zero cards AND no `startNewBatchSlot` injected.
- *   3. `belowSlot` — the form OR a gated screen, depending on subscription
- *      state.
+ *   2. `<UnscheduledBatchList />` — top buttons row, then the form (or gated
+ *      screen) directly under the buttons via the `belowButtonsSlot` prop,
+ *      then the stacked cards for any batches in `reviewing` / `cancelled`.
+ *      The order puts the create-new-posts action ABOVE existing batches so
+ *      the form expands next to the button that triggers it rather than
+ *      below the user's cancelled cards. Self-hides when there are zero
+ *      cards AND no `startNewBatchSlot` injected — see fresh-state branch
+ *      below.
+ *   3. **Fresh state only** — when there are zero cards and the user can
+ *      create, `<UnscheduledBatchList />` returns null and the form
+ *      (`belowSlot`) is rendered directly under the header so it takes the
+ *      full frame.
  *
  * The collapse rule (D-S14): when 1+ cards exist + the user can generate,
  * the form starts collapsed and the top `[Start new batch]` button toggles
@@ -173,9 +180,18 @@ export default async function CreatePage() {
           {...(canStartNew && cards.length > 0
             ? { startNewBatchSlot: <CreateHubStartNewBatchButton /> }
             : {})}
+          belowButtonsSlot={belowSlot}
         />
 
-        {belowSlot}
+        {/*
+          Fresh-state fallback: when there are zero cards AND no startNewBatchSlot
+          is injected, `<UnscheduledBatchList />` returns null (it has no
+          buttons row to render) and the form needs to render here directly so
+          it still appears on the page. In the cards-present path the list
+          already rendered the form via `belowButtonsSlot` above, so this
+          branch is a no-op.
+        */}
+        {cards.length === 0 && belowSlot}
       </div>
     </CreateHubFormProvider>
   );

@@ -23,7 +23,7 @@ import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-serv
 export function DashboardTopBar({
   subscription,
   hasAnyBatch,
-  scheduledBatchCount,
+  proBatchesUsed,
 }: {
   subscription: SubscriptionStateSnapshot;
   /**
@@ -34,14 +34,14 @@ export function DashboardTopBar({
    */
   hasAnyBatch: boolean;
   /**
-   * Stage-2 D-S2-10: count of `weekly_batches.status IN ('scheduling',
-   * 'completed')` for the user. Only consulted for the Pro branch's pill —
-   * Trial/Starter ignore it. Pre-computed in the layout (mirrors the
-   * `hasAnyBatch` pattern: gated DB hit by plan) so this component stays a
-   * pure render of its props. Sourced from `postService.getScheduledViewForUser`,
-   * which task-02 extended to expose this field.
+   * Stage-2 D-S2-10 revised: count of ALL `weekly_batches` rows for the user
+   * in the current Pro period (any status — reviewing, scheduling, completed,
+   * cancelled). Sourced from `subscription.proQuota.used`, which is the same
+   * value `canGenerate` evaluates against the 4-per-period cap (D-A16). The
+   * pill therefore CANNOT disagree with the server gate. Only the Pro
+   * variant reads this; Trial / Starter ignore it.
    */
-  scheduledBatchCount: number;
+  proBatchesUsed: number;
 }) {
   const planLabel = PLAN_LABELS[subscription.plan];
 
@@ -78,13 +78,14 @@ export function DashboardTopBar({
            cap, 1 left); a future date means "at cap" (0 left). This matches
            `subscriptionService.nextResetAt`'s `no_batch_yet` contract for
            Starter — no rolling-7-day query is duplicated here.
-         - Active Pro → variant="pro". Stage-2 D-S2-10 re-anchors
-           `batchesRemaining` on `scheduledBatchCount` (count of
-           `weekly_batches.status IN ('scheduling','completed')`) rather than
-           the Phase-4 `proQuota.used` (batchesUsedThisPeriod) basis —
-           cancelled and reviewing batches on `/create` no longer deduct.
-           `periodEndsAt` still comes from `proQuota` (Phase 4 D-A19) and
-           drives the at-cap countdown.
+         - Active Pro → variant="pro". `batchesRemaining = 4 - proBatchesUsed`
+           where `proBatchesUsed = subscription.proQuota.used` — the same
+           number the server cap (canGenerate D-A16) compares against. This
+           was changed from the earlier `scheduledBatchCount` basis because
+           cancelled batches DO consume a slot at the server cap, and the
+           pill needs to mirror that so the user never sees "N batches left"
+           while `canGenerate` blocks them. `periodEndsAt` still comes from
+           `proQuota` (Phase 4 D-A19) and drives the at-cap countdown.
          - Inactive paid plans (cancelled / expired Starter or Pro) render
            only the plan pill itself — no status pill to show.
       */}
@@ -102,7 +103,7 @@ export function DashboardTopBar({
         subscription.proQuota !== null ? (
         <QuotaCountdownPill
           variant="pro"
-          batchesRemaining={Math.max(0, 4 - scheduledBatchCount)}
+          batchesRemaining={Math.max(0, 4 - proBatchesUsed)}
           periodEndsAt={subscription.proQuota.periodEndsAt}
         />
       ) : null}

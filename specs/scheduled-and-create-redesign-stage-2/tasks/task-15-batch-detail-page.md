@@ -10,6 +10,23 @@ not started
 
 This task file was re-issued after the Stage-2 spec update introduced (a) the Network × Day grid (D-S2-15) replacing the per-day strip, and (b) the non-destructive Cancel-vs-Delete contract (§0, D-S2-6 / D-S2-7 / D-S2-21 / D-S2-22). The original draft built a column of `<PostDaySlot />` rows with a hardcoded `1..7` loop; the re-issued draft builds a network × day grid sized to the **real batch length** (Pro batch 4 = 9 posts) plus per-network grouped sections. The per-post cancel is no longer destructive — no image movement, restore is available, dialog button is non-destructive variant.
 
+## Post-land amendment — option (b) selection-backed reader
+
+Wave 5 originally shipped a `scheduled_posts`-backed reader per §6.9 / D-S2-15. Post-land discovery: no writer populates `scheduled_posts` today (Phase-4 cron deferred per §0 / §8), so every cell rendered ✗ and every per-network section read `"No posts scheduled to {Network} yet."` for every batch — same root cause as the Wave 4.5.1 0-count regression on `/schedule`, one layer deeper.
+
+Resolved by adopting the §5.3 PRESENT-DAY vs FUTURE-STATE pattern (the same amendment already governs `getScheduledViewForUser`): cells + sections now read `post_selections` (row presence = selected per D14); `canCancel` / `canRestore` are always `false` until the writer + cancel UI both ship. Per-row scheduled time is the same fallback the column header uses (`batch.createdAt + (postOrder - 1) days`) — there are no per-network minute offsets in present-day data without a writer. The `canCancel` / `canRestore` fields stay on `SectionRow` so the future swap is structural, not additive.
+
+**Swap trigger.** When BOTH (a) a `scheduled_posts` writer ships (Phase-4 cron or an explicit step inside `scheduleBatch`) AND (b) the cancel UI is required to surface real status, swap the reader back to `scheduled_posts` filtered to `status IN ('pending', 'posted')` and re-introduce the D-S2-7 / D-S2-21 gate computation. Same rule §5.3 documents for the `/schedule` reader.
+
+**Files touched by the amendment.**
+- `src/app/(app)/(onboarded)/schedule/[batchId]/page.tsx` — query `post_selections` instead of `scheduled_posts`; rename `scheduledRows` → `selectionRows`.
+- `src/components/schedule/batch-detail-view.tsx` — `selectionRows: PostSelection[]` prop; rebuilt `shape()` reading row-presence in `post_selections`; gates pinned `false`; docblock spells out the PRESENT-DAY / FUTURE-STATE contract.
+- This task file — addendum (this section).
+
+`spec.md` is intentionally not edited; §5.3 already governs the pattern.
+
+Authoritative prompt with the full locked-in intent: `C:\UniqueMe\prompts\scheduled-and-create-redesign-stage-2-wave-5-option-b-selections-reader.md`.
+
 ## Description
 
 Build the new `/schedule/[batchId]` route (fixes today's 404 on the `{N} posts` link from `<ScheduledBatchBox />`). The page renders a **Network × Day grid** at the top — rows = networks (Facebook → Instagram → LinkedIn today, architected for new networks to append), columns = days of the batch (column count = `weeklyBatches.totalPosts`, NOT hardcoded). Each cell is a ✓ iff a `scheduled_posts` row exists for that `(postId, platform)` pair with `status IN ('pending', 'posted')`; otherwise ✗. `'cancelled'` rows render as ✗ (treated as absent per the Cancel-vs-Delete contract).

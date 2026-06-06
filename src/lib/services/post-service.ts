@@ -154,6 +154,14 @@ export type UnscheduledBatchCard = {
   theme: string;
   importantThing: string;
   totalPosts: number;
+  /**
+   * `weeklyBatches.batchOrdinalInPeriod`. Pro: 1–4, assigned at generation
+   * time from `proQuota.used + 1` and frozen for the life of the row — so a
+   * cancelled batch keeps the slot number it was created at. Trial / Starter:
+   * `null` (those plans have different cap mechanisms — Trial=1 lifetime,
+   * Starter=1 per rolling 7d — and don't need a /4 ordinal).
+   */
+  ordinal: number | null;
   status: "reviewing" | "cancelled";
   counts: { facebook: number; instagram: number; linkedin: number };
 };
@@ -404,6 +412,7 @@ export async function getUnscheduledBatchesForUser(
       theme: weeklyBatches.theme,
       importantThing: weeklyBatches.importantThing,
       totalPosts: weeklyBatches.totalPosts,
+      ordinal: weeklyBatches.batchOrdinalInPeriod,
       status: weeklyBatches.status,
     })
     .from(weeklyBatches)
@@ -424,6 +433,10 @@ export async function getUnscheduledBatchesForUser(
     theme: r.theme,
     importantThing: r.importantThing,
     totalPosts: r.totalPosts,
+    // Frozen at generation time (see /create/actions.ts:78). Pro: 1–4; Trial /
+    // Starter: null. A cancelled batch keeps the slot number it was created
+    // at, so the user can see which slot was burned even after cancelling.
+    ordinal: r.ordinal,
     // The DB column is the broader `weeklyBatchStatus` enum; the WHERE clause
     // above narrows the actual values to this literal pair, so the cast is
     // type-safe at runtime.

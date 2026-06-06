@@ -61,17 +61,19 @@ export default async function OnboardedLayout({
       ? await postService.hasAnyBatch(session.user.id)
       : false;
 
-  // Pro-only `scheduledBatchCount` lookup feeds `<DashboardTopBar />`'s pill
-  // (Stage-2 D-S2-10). Trial/Starter ignore the value entirely. Sourced from
-  // `postService.getScheduledViewForUser`, which task-02 extended to expose
-  // `scheduledBatchCount` on the `ScheduledView` snapshot. Gated by plan so
-  // Trial/Starter renders skip the extra query (mirrors the `hasAnyBatch`
-  // pattern above). Zero default keeps the prop type a plain `number` for
-  // the topbar's pure-render contract.
-  const scheduledBatchCount =
-    subscription.plan === "pro" && subscription.status === "active"
-      ? (await postService.getScheduledViewForUser(session.user.id))
-          .scheduledBatchCount
+  // Pro-only `proBatchesUsed` count feeds `<DashboardTopBar />`'s pill
+  // (Stage-2 D-S2-10 revised). The pill MUST match the server cap exactly so
+  // a user can never see "N batches left" while `canGenerate` blocks them.
+  // The server cap (subscription-service.ts D-A16) counts ALL batches in the
+  // current Pro period regardless of status — cancelled, reviewing,
+  // scheduling, completed all consume a slot. The snapshot already exposes
+  // that exact number on `subscription.proQuota.used`, so the pill reads
+  // straight from it. No `getScheduledViewForUser` hit needed here — the
+  // grid-bound rolling-4 count and the period quota count are now two
+  // different things; the pill cares only about the latter.
+  const proBatchesUsed =
+    subscription.plan === "pro" && subscription.proQuota !== null
+      ? subscription.proQuota.used
       : 0;
 
   return (
@@ -82,7 +84,7 @@ export default async function OnboardedLayout({
         <DashboardTopBar
           subscription={subscription}
           hasAnyBatch={hasAnyBatch}
-          scheduledBatchCount={scheduledBatchCount}
+          proBatchesUsed={proBatchesUsed}
         />
         <div className="flex-1 px-5 sm:px-8 lg:px-12 py-8 sm:py-12">
           {children}

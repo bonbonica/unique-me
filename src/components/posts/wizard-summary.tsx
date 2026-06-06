@@ -277,7 +277,7 @@ function SummaryCard({
         Image — Phase 3
       </div>
 
-      <div className="space-y-2 flex-1">
+      <div className="space-y-2 flex-1 user-text">
         <p className="text-sm leading-7 whitespace-pre-wrap">{text}</p>
         {hashtags.length > 0 ? (
           <p className="text-xs text-primary leading-6 break-words">

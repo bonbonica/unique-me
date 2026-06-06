@@ -196,6 +196,43 @@
   body {
     @apply bg-background text-foreground;
     font-feature-settings: "rlig" 1, "calt" 1;
+    /*
+      Default app chrome — headings, labels, buttons, nav, badges, status —
+      is non-selectable. Stops accidental highlight selections on the
+      interactive scaffolding so the cursor and focus rings feel intentional
+      rather than draggable. User content (post captions, hashtags, theme +
+      important-thing, image captions) opts back IN via the Tailwind
+      `select-text` utility (or the `.user-text` class below). Form inputs
+      stay selectable via the explicit overrides below — copy/paste from
+      input fields must keep working.
+    */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  /*
+    Re-enable text selection on every native text-input affordance. Without
+    this, typing/IME caret behavior breaks in textarea + input fields under
+    the body-wide `user-select: none` rule above.
+  */
+  input,
+  textarea,
+  select,
+  [contenteditable="true"],
+  [contenteditable=""] {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+  /*
+    Pointer affordance survives the body cursor: default reset. Native <a>
+    and <button> elements get pointer back. shadcn primitives that render
+    as <button> also inherit this.
+  */
+  a,
+  button,
+  [role="button"] {
+    cursor: pointer;
   }
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring/70;
@@ -203,6 +240,21 @@
 }
 
 @layer utilities {
+  /*
+    Opt-in selectable text for user-generated content (post captions,
+    hashtags, theme / important-thing, image captions). Counterpart to the
+    body-wide `user-select: none` reset in @layer base. Prefer the Tailwind
+    `select-text` utility on individual elements where one already exists;
+    use `.user-text` when grouping multiple lines without adding a class to
+    each child.
+  */
+  .user-text,
+  .user-text * {
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+  }
+
   .card-interactive {
     @apply transition-all duration-300 ease-out;
   }

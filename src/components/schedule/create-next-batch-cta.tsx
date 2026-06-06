@@ -9,13 +9,20 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-type Props = { scheduledBatchCount: number };
+type Props = {
+  /**
+   * Count of ALL `weekly_batches` rows for the user in the current Pro
+   * period (any status). Mirrors `canGenerate`'s server cap (D-A16) so the
+   * CTA can never advertise a slot the cap won't honour.
+   */
+  proBatchesUsed: number;
+};
 
 const CAP = 4;
 
-export function CreateNextBatchCta({ scheduledBatchCount }: Props) {
-  const atCap = scheduledBatchCount >= CAP;
-  const label = `Create next batch — ${scheduledBatchCount}/${CAP}`;
+export function CreateNextBatchCta({ proBatchesUsed }: Props) {
+  const atCap = proBatchesUsed >= CAP;
+  const label = `Create next batch — ${proBatchesUsed}/${CAP}`;
 
   if (!atCap) {
     return (

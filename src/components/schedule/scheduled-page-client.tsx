@@ -9,7 +9,18 @@ import { CancelBatchDialog } from "./cancel-batch-dialog";
 import { CreateNextBatchCta } from "./create-next-batch-cta";
 import { ScheduledBatchBox } from "./scheduled-batch-box";
 
-type Props = { view: ScheduledView };
+type Props = {
+  view: ScheduledView;
+  /**
+   * Pro: count of ALL `weekly_batches` rows for the user in the current Pro
+   * period (any status, including cancelled) — the same value
+   * `canGenerate` evaluates against the 4-per-period cap. Drives the
+   * `<CreateNextBatchCta />` label so the CTA and the server gate never
+   * disagree. Trial / Starter: 0 (CTA's `/4` semantic is Pro-specific; for
+   * non-Pro plans the CTA still renders but never trips the at-cap state).
+   */
+  proBatchesUsed: number;
+};
 
 type CancelTarget = {
   id: string;
@@ -29,7 +40,7 @@ type CancelTarget = {
  * Empty state collapses into a single CTA when there are zero current
  * batches.
  */
-export function ScheduledPageClient({ view }: Props) {
+export function ScheduledPageClient({ view, proBatchesUsed }: Props) {
   const [cancelTarget, setCancelTarget] = useState<CancelTarget | null>(null);
 
   const isEmpty = view.current.length === 0;
@@ -57,7 +68,7 @@ export function ScheduledPageClient({ view }: Props) {
   return (
     <>
       <div className="space-y-8">
-        <CreateNextBatchCta scheduledBatchCount={view.scheduledBatchCount} />
+        <CreateNextBatchCta proBatchesUsed={proBatchesUsed} />
         <section
           className="grid grid-cols-1 md:grid-cols-2 gap-6"
           aria-label="Current period batches"

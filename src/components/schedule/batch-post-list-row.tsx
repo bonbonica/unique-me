@@ -88,8 +88,8 @@ export function BatchPostListRow({
       <p
         className={
           isCancelled
-            ? "text-base leading-7 text-muted-foreground line-clamp-3"
-            : "text-base leading-7 text-foreground line-clamp-3"
+            ? "text-base leading-7 text-muted-foreground line-clamp-3 select-text cursor-text"
+            : "text-base leading-7 text-foreground line-clamp-3 select-text cursor-text"
         }
       >
         {row.postText}
