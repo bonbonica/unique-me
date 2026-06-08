@@ -9,7 +9,6 @@ import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
 import { TrialNote } from "@/components/create/trial-note";
 import { UnscheduledBatchList } from "@/components/create/unscheduled-batch-list";
 import { auth } from "@/lib/auth";
-import { ROLLING_PERIOD_DAYS } from "@/lib/pricing";
 import { type Profile } from "@/lib/schema";
 import {
   postService,
@@ -101,39 +100,10 @@ export default async function CreatePage() {
   if (!belowSlot) {
     const gate = await subscriptionService.canGenerate(session.user.id);
     if (!gate.allowed) {
-      // Resolve the batch that the `<CurrentlyPostingCta />` should target
-      // when the cap-active arms render below. For Pro, this is the batch
-      // whose ordinal matches the current period week (the 4-per-month
-      // structure assigns one batch per ~7-day window). For Starter / Trial
-      // (no `periodStart` passed), it falls back to the user's oldest
-      // scheduling/completed batch — in practice their only batch.
-      //
-      // `periodStart` is derived from `proQuota.periodEndsAt - 30d` per the
-      // reconstruction explicitly endorsed in subscription-service.ts:72.
-      // Only Pro carries `proQuota`; Starter / Trial pass `undefined` so
-      // the helper skips the Pro branch.
-      const PERIOD_MS = ROLLING_PERIOD_DAYS * 24 * 60 * 60 * 1000;
-      const proPeriodStart =
-        subscription.plan === "pro" && subscription.proQuota
-          ? new Date(
-              subscription.proQuota.periodEndsAt.getTime() - PERIOD_MS,
-            )
-          : undefined;
-      const currentlyPostingBatch =
-        await postService.getCurrentlyPostingBatch(
-          session.user.id,
-          proPeriodStart,
-        );
-      const currentlyPostingBatchId = currentlyPostingBatch?.id ?? null;
-
       switch (gate.reason) {
         case "weekly_cap_active":
           belowSlot = (
-            <QuotaGatedScreen
-              variant="quota"
-              nextResetAt={gate.nextResetAt}
-              currentlyPostingBatchId={currentlyPostingBatchId}
-            />
+            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
           );
           capacityTooltip = "You've used all batches this period.";
           break;
@@ -143,11 +113,7 @@ export default async function CreatePage() {
           // `variant="monthly_quota"` with the 4-of-4-batches copy + the
           // `batchesUsed` field; swap this arm there.
           belowSlot = (
-            <QuotaGatedScreen
-              variant="quota"
-              nextResetAt={gate.nextResetAt}
-              currentlyPostingBatchId={currentlyPostingBatchId}
-            />
+            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
           );
           capacityTooltip = "You've used all batches this period.";
           break;

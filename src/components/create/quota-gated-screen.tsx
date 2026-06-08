@@ -27,27 +27,13 @@ import { Button } from "@/components/ui/button";
  */
 export function QuotaGatedScreen(
   props:
-    | {
-        variant: "quota";
-        nextResetAt: Date;
-        currentlyPostingBatchId: string | null;
-      }
-    | {
-        variant: "monthly_quota";
-        nextResetAt: Date;
-        batchesUsed: number;
-        currentlyPostingBatchId: string | null;
-      }
+    | { variant: "quota"; nextResetAt: Date }
+    | { variant: "monthly_quota"; nextResetAt: Date; batchesUsed: number }
     | { variant: "overage"; currentCount: number }
     | { variant: "inactive" },
 ) {
   if (props.variant === "quota") {
-    return (
-      <QuotaVariant
-        nextResetAt={props.nextResetAt}
-        currentlyPostingBatchId={props.currentlyPostingBatchId}
-      />
-    );
+    return <QuotaVariant nextResetAt={props.nextResetAt} />;
   }
 
   if (props.variant === "monthly_quota") {
@@ -55,12 +41,7 @@ export function QuotaGatedScreen(
     // not rendered in copy — "all 4 batches" already conveys the count
     // (task 13 § 4). The prop stays in the union so a future under-cap
     // warning variant can reuse the shape.
-    return (
-      <MonthlyQuotaVariant
-        nextResetAt={props.nextResetAt}
-        currentlyPostingBatchId={props.currentlyPostingBatchId}
-      />
-    );
+    return <MonthlyQuotaVariant nextResetAt={props.nextResetAt} />;
   }
 
   if (props.variant === "overage") {
@@ -134,13 +115,7 @@ function useHasMounted(): boolean {
  * which gates them behind the post-hydration render — keeping the render
  * pure during SSR and the first client pass.
  */
-function QuotaVariant({
-  nextResetAt,
-  currentlyPostingBatchId,
-}: {
-  nextResetAt: Date;
-  currentlyPostingBatchId: string | null;
-}) {
+function QuotaVariant({ nextResetAt }: { nextResetAt: Date }) {
   const mounted = useHasMounted();
 
   const headline = mounted
@@ -156,7 +131,7 @@ function QuotaVariant({
         Your weekly cycle resets 7 days after your last batch was created.
       </p>
       <div className="flex flex-col gap-3">
-        <CurrentlyPostingCta batchId={currentlyPostingBatchId} />
+        <CurrentlyPostingCta />
       </div>
     </div>
   );
@@ -191,13 +166,7 @@ function buildQuotaHeadline(nextResetAt: Date): string {
  * accepts and validates it at the union boundary, but the rendered copy
  * doesn't surface the number (see § 4 of task 13).
  */
-function MonthlyQuotaVariant({
-  nextResetAt,
-  currentlyPostingBatchId,
-}: {
-  nextResetAt: Date;
-  currentlyPostingBatchId: string | null;
-}) {
+function MonthlyQuotaVariant({ nextResetAt }: { nextResetAt: Date }) {
   const mounted = useHasMounted();
 
   const resetCopy = mounted
@@ -211,7 +180,7 @@ function MonthlyQuotaVariant({
       </h1>
       <p className="text-base text-muted-foreground leading-7">{resetCopy}</p>
       <div className="flex flex-col gap-3">
-        <CurrentlyPostingCta batchId={currentlyPostingBatchId} />
+        <CurrentlyPostingCta />
       </div>
     </div>
   );
