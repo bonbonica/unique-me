@@ -34,9 +34,14 @@ import { cn } from "@/lib/utils";
  *   - 0 selected           → label "Schedule all {Network} posts" →
  *                            bulk-select all N on the client (server
  *                            catches up via onSelectAllForPlatform).
- *   - 1 .. N-1 selected    → label "{count} {Network} posts scheduled"
- *                            → no-op (status display; user keeps ticking
- *                            checkboxes or clicks Next).
+ *   - 1 .. N-1 selected    → label "Schedule remaining {N-selected}
+ *                            {Network} posts" → bulk-selects every
+ *                            post on the platform, idempotently. The
+ *                            already-selected rows hit
+ *                            `ON CONFLICT DO NOTHING` in the service
+ *                            so no duplicate `post_selections` rows are
+ *                            created (post-service.ts:1051-1053 +
+ *                            schema unique index).
  *   - all N selected       → label "N {Network} posts scheduled" →
  *                            deselects all N (undo).
  *
@@ -98,9 +103,13 @@ export function WizardStep({
    *
    *   - **0 selected** — label "Schedule all {Network} posts". Click
    *     selects all N. Icon inherits button color.
-   *   - **1 .. N-1 selected** — label "{count} {Network} posts
-   *     scheduled". Status display; click is a no-op. Label updates
-   *     live as the user ticks individual checkboxes.
+   *   - **1 .. N-1 selected** — label "Schedule remaining {N-selected}
+   *     {Network} posts". Click bulk-selects every post on the platform
+   *     idempotently — the already-selected rows are skipped server-side
+   *     via `selectForNetwork`'s `ON CONFLICT DO NOTHING` on the
+   *     `(postId, platform)` unique index, so the click never creates
+   *     duplicate rows and never errors. The already-scheduled posts
+   *     remain untouched; only the unscheduled ones get inserted.
    *   - **all N selected** — label "N {Network} posts scheduled". Icon
    *     flips to destructive (#dc3030) signalling "all in — click to
    *     undo." Click DESELECTS all N.
@@ -108,22 +117,28 @@ export function WizardStep({
    * The button never advances the wizard. Step navigation happens only
    * via the WizardNav Back/Next buttons.
    */
+  const remainingCount = totalPosts - selectedCount;
   let bulkLabel: string;
   if (selectedCount === 0) {
     bulkLabel = `Schedule all ${NETWORK_LABELS[platform]} posts`;
-  } else {
+  } else if (isAllSelected) {
     bulkLabel = `${selectedCount} ${NETWORK_LABELS[platform]} ${selectedCount === 1 ? "post" : "posts"} scheduled`;
+  } else {
+    bulkLabel = `Schedule remaining ${remainingCount} ${NETWORK_LABELS[platform]} ${remainingCount === 1 ? "post" : "posts"}`;
   }
 
   function handleBulkClick() {
-    if (selectedCount === 0) {
-      onSelectAllForPlatform(platform);
-    } else if (isAllSelected) {
+    if (isAllSelected) {
+      // Full set already scheduled → click is the undo affordance.
       onDeselectAllForPlatform(platform);
+      return;
     }
-    // Middle range (1..N-1): no-op. The button is a status display in
-    // this state — the user keeps ticking individual checkboxes or
-    // clicks Next to advance.
+    // 0 or middle range: "make sure all are scheduled." The platform
+    // helper fans `selectForNetworkAction` across every post in parallel
+    // (network-wizard.tsx); the service uses `ON CONFLICT DO NOTHING` on
+    // the `(postId, platform)` unique index so already-scheduled posts
+    // are silently skipped — no duplicates, no error.
+    onSelectAllForPlatform(platform);
   }
 
   return (
@@ -206,6 +221,18 @@ function PostCard({
 
   return (
     <li className="bg-card rounded-2xl border border-border p-6 shadow-soft flex flex-col gap-4 card-interactive">
+      {/* Top-right "Schedule this to {Network}?" toggle (moved from the
+          bottom of the card so the schedule affordance sits in the
+          conventional corner-action position users scan for). Behavior
+          is unchanged from the previous bottom-anchored placement. */}
+      <label className="self-end flex items-center gap-2 text-sm cursor-pointer select-none">
+        <Checkbox
+          checked={isSelected}
+          onCheckedChange={(checked) => onToggle(checked === true)}
+        />
+        Schedule this to {NETWORK_LABELS[platform]}?
+      </label>
+
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs uppercase tracking-wider text-muted-foreground">
           Post {post.postOrder} / {totalPosts}
@@ -238,14 +265,6 @@ function PostCard({
           <StaleVariationNote canRegen={canRegen} platform={platform} />
         ) : null}
       </div>
-
-      <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
-        <Checkbox
-          checked={isSelected}
-          onCheckedChange={(checked) => onToggle(checked === true)}
-        />
-        Schedule this to {NETWORK_LABELS[platform]}?
-      </label>
 
       <div
         className={`flex items-center ${mode === "cancelled" ? "justify-start" : "justify-between"} border-t border-border pt-4`}
