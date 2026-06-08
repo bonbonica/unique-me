@@ -64,7 +64,7 @@ import type { BatchForReview } from "@/lib/services/post-service";
  * null we omit the suffix entirely rather than rendering `Batch null/4`.
  */
 function currentlyPostingHeading(ordinal: number | null): string {
-  const base = "Currently posting this week on your social media";
+  const base = "Currently posting on your social media";
   if (ordinal === null) return base;
   return `${base} · Batch ${ordinal}/${MAX_BATCHES_PER_PERIOD}`;
 }
