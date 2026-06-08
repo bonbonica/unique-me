@@ -17,7 +17,7 @@
 
 ### Items deliberately deferred (named so they don't sneak in)
 
-- **Section B — Themed sequential batches.** The themed/sequential creation flow depends on scheduling and background-job infrastructure that does not exist yet. Specced separately in `specs/phase-4-pro-monthly-quota-spec.md` (Section B). Build after Section A ships.
+- **Section B — Themed sequential batches.** The themed/sequential creation flow depends on scheduling and background-job infrastructure that does not exist yet. Specced separately in `specs/phase-4-themed-sequential-batches/spec.md`. Build after Section A ships.
 - **Real payment / billing integration.** Still Phase 5. `periodStartDate` is set manually via Drizzle Studio or via `setPlan` during Phase 4.
 - **Removal of `postsUsedThisMonth` / `regenerationsDuringTrial`.** These columns are dead machinery; the open question of removal is deferred (no cleanup task in Phase 4).
 - **Multi-theme / annual plans / upgrade UI.** Still Phase 5.
@@ -359,7 +359,7 @@ All existing reasons (`trial_batch_exists`, `weekly_cap_active`, `starter_platfo
 
 ## 8. What this spec deliberately does NOT cover
 
-- **Section B — themed sequential batches.** Specced in `specs/phase-4-pro-monthly-quota-spec.md` (Section B); requires not-yet-built scheduling infrastructure.
+- **Section B — themed sequential batches.** Specced in `specs/phase-4-themed-sequential-batches/spec.md`; requires not-yet-built scheduling infrastructure.
 - **Real payments / Polar / Stripe.** Phase 5.
 - **Plan upgrade UI.** Phase 5. Pro is reached via `setPlan` in Drizzle Studio during Phase 4.
 - **Multi-theme batches, annual plans, multi-business.** Phase 5+.
