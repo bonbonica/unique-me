@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Calendar, Loader2 } from "lucide-react";
+import { Calendar, Info, Loader2 } from "lucide-react";
 import { stopBatchAction } from "@/app/(app)/(onboarded)/posts/actions";
 import { DayLabel } from "@/components/posts/day-label";
 import {
@@ -156,6 +156,30 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
           </Button>
         ) : null}
       </header>
+
+      {/* Persistent informational notice on the currently-posting view.
+          Renders only for non-cancelled batches (the cancelled state has its
+          own "Batch cancelled" header + Start-a-new-batch block below; the
+          regular-publishing reminder doesn't apply there). Calm
+          muted-surface treatment per DESIGN.md §3 — bg-muted/50 + border,
+          Info icon in muted-foreground, body text in muted-foreground.
+          Not destructive, not primary-tinted. */}
+      {!isCancelled ? (
+        <div
+          role="note"
+          className="rounded-2xl border border-border bg-muted/50 px-5 py-4 flex items-start gap-3"
+        >
+          <Info
+            className="size-4 text-muted-foreground shrink-0 mt-1"
+            strokeWidth={1.5}
+            aria-hidden="true"
+          />
+          <p className="text-sm text-muted-foreground leading-6">
+            Check your posts regularly. Social media partners occasionally
+            update their systems, which may affect automated publishing.
+          </p>
+        </div>
+      ) : null}
 
       {isCancelled ? (
         <div className="rounded-2xl border border-border bg-muted px-6 py-4 text-sm">

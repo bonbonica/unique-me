@@ -19,6 +19,14 @@ import {
   textFor,
 } from "@/components/posts/network-preview";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
@@ -97,6 +105,13 @@ export function WizardSummary({
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // One-time disclaimer popup fired at whole-batch scheduling completion
+  // (the reviewing → scheduling OR cancelled → scheduling transition).
+  // Opens once when the schedule/reschedule action returns ok; the
+  // router.refresh() that flips the page to <LockedSummary /> is deferred
+  // until the user dismisses the dialog. NOT per-post, NOT per checkbox
+  // toggle — only at this one batch-level transition point.
+  const [disclaimerOpen, setDisclaimerOpen] = useState(false);
 
   // Flatten lifted selections into a flat list of (post, platform) pairs.
   // Filtered to platforms in profile.platforms so a leftover row from a
@@ -132,12 +147,25 @@ export function WizardSummary({
       : await scheduleMyPickAction(batch.id);
     if (result.ok) {
       // batch.status flips to "scheduling" from either source state.
-      // The page re-renders as <LockedSummary />. Nothing more to do here.
-      router.refresh();
+      // Show the one-time disclaimer; the router.refresh() that flips the
+      // page to <LockedSummary /> happens on dismiss (handleDisclaimerClose
+      // below). The success branch never falls through to a refresh
+      // directly — the dialog is the gate.
+      setDisclaimerOpen(true);
     } else {
       setError(scheduleErrorCopy(result.error));
       setSubmitting(false);
     }
+  }
+
+  // Single close handler covers all dismiss paths (the Got it button, Esc,
+  // outside-click). Closes the dialog and only then refreshes — guarantees
+  // the disclaimer is acknowledged once before the locked-summary view
+  // renders.
+  function handleDisclaimerClose(next: boolean) {
+    if (next) return;
+    setDisclaimerOpen(false);
+    router.refresh();
   }
 
   return (
@@ -199,6 +227,31 @@ export function WizardSummary({
           </div>
         </>
       ) : null}
+
+      {/* One-time disclaimer fired at whole-batch scheduling completion
+          (the reviewing → scheduling OR cancelled → scheduling transition).
+          Opens once when handleSchedule succeeds; dismissing it triggers
+          the deferred router.refresh() that flips the page to
+          <LockedSummary />. NOT per-post, NOT per checkbox toggle — only
+          here at this one transition point. */}
+      <Dialog open={disclaimerOpen} onOpenChange={handleDisclaimerClose}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-fraunces text-2xl tracking-tight font-medium">
+              Check your posts regularly
+            </DialogTitle>
+          </DialogHeader>
+          <DialogDescription className="text-base leading-7 text-muted-foreground">
+            Social media partners occasionally update their systems, which
+            may affect automated publishing.
+          </DialogDescription>
+          <DialogFooter>
+            <Button onClick={() => handleDisclaimerClose(false)}>
+              Got it
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }
