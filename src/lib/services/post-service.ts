@@ -3,6 +3,7 @@ import "server-only";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
+import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
 import {
   type NewPostVariation,
   type Post,
@@ -279,8 +280,8 @@ export async function getCurrentBatch(
 /**
  * Most recent batch in any *resumable* status — `reviewing`, `scheduling`,
  * `scheduled`, or `cancelled`. Used by `/posts` when no `?batchId=` query
- * param is supplied (sidebar "My Posts" link, the QuotaGatedScreen's
- * "See the batch currently posting" CTA).
+ * param is supplied (sidebar "My Posts" link — "resume what you were last
+ * working on" semantics).
  *
  * Resolves regardless of subscription plan — viewing or managing an
  * existing batch is never gated. Only generating a *new* batch goes through
@@ -288,6 +289,12 @@ export async function getCurrentBatch(
  *
  * `completed` is excluded (Phase 4 owns that surface) and `in_progress` is
  * excluded (stale/unreachable status; defensive).
+ *
+ * **Not** used by the `<CurrentlyPostingCta />` on `/create` — that path
+ * resolves the OLDEST `scheduling | completed` batch via
+ * {@link getCurrentlyPostingBatch} so the "currently posting" framing
+ * lands on the batch whose schedule window fires first, not whichever was
+ * most recently created.
  */
 export async function getResumableBatch(
   userId: string
@@ -310,6 +317,100 @@ export async function getResumableBatch(
     .limit(1);
 
   return batch ?? null;
+}
+
+/**
+ * Resolves "the batch currently posting on the user's social media" — the
+ * target for `/create`'s `<CurrentlyPostingCta />` button.
+ *
+ * **Pro semantics — time-based (the corrected logic).** The Pro plan
+ * structure is 4 batches across a 30-day period, one batch per
+ * (approximately) one-week window. The batch with `batchOrdinalInPeriod
+ * = N` is intended to post during week N of the period. So "currently
+ * posting" = the batch whose ordinal matches the *current* period week:
+ *
+ *   periodWeek = clamp(1, floor((now - periodStart) / 7d) + 1, 4)
+ *   batch where batchOrdinalInPeriod = periodWeek (any status)
+ *
+ * Status-agnostic on purpose: a `completed` batch in week 1 is still
+ * "the one that posted during week 1"; a `reviewing` batch in week 2 is
+ * "the one that should be posting now but the user hasn't scheduled
+ * yet". Either is the right answer for the CTA's framing.
+ *
+ * Callers pass `periodStart` only for Pro users — derive it from
+ * `subscription.proQuota.periodEndsAt - 30d` (subscription-service.ts:72
+ * explicitly endorses this reconstruction; the snapshot doesn't carry
+ * `currentPeriodStart` to keep the field count down).
+ *
+ * **Starter / Trial semantics — single-batch fallback.** Those plans
+ * cap at 1 batch (lifetime for Trial; rolling 7-day window for Starter),
+ * so the time-based week logic doesn't apply. Callers omit `periodStart`
+ * and the helper returns the user's oldest `scheduling | completed`
+ * batch (in practice, their only one).
+ *
+ * **Pro fallback when no batch matches the period week.** Could happen
+ * if the user hasn't created their week-N batch yet — e.g., we're in
+ * week 3 of the period and only batches 1, 2 exist. The helper falls
+ * through to the same Starter-style "oldest `scheduling | completed`"
+ * heuristic so the CTA still resolves to *something* the user might want
+ * to look at, rather than returning null and degrading to bare `/posts`
+ * → `getResumableBatch` (which would land on the newest reviewing batch,
+ * the original bug). Final null only when the user has NO
+ * scheduling/completed batches at all.
+ *
+ * **PRESENT-DAY vs FUTURE-STATE** (§5.3 amendment pattern). Today no
+ * writer flips a batch to `in_progress` — Phase 7's posting cron is
+ * deferred per spec §8. When the cron + status writer ships, this helper
+ * can short-circuit on `eq(weeklyBatches.status, "in_progress")` before
+ * the ordinal lookup, since the writer will be authoritative about
+ * what's actually mid-posting. Until then, ordinal == periodWeek is the
+ * best proxy for Pro and the FIFO heuristic is the best proxy for non-Pro.
+ *
+ * The sidebar's "My Posts" link still uses {@link getResumableBatch}
+ * ("resume what you were last working on" = newest). The two helpers
+ * answer different questions and must NOT be unified.
+ */
+export async function getCurrentlyPostingBatch(
+  userId: string,
+  periodStart?: Date
+): Promise<WeeklyBatch | null> {
+  // Pro path: ordinal == periodWeek. Status-agnostic.
+  if (periodStart) {
+    const elapsedMs = Math.max(0, Date.now() - periodStart.getTime());
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const periodWeek = Math.min(
+      MAX_BATCHES_PER_PERIOD,
+      Math.floor(elapsedMs / WEEK_MS) + 1
+    );
+    const [byOrdinal] = await db
+      .select()
+      .from(weeklyBatches)
+      .where(
+        and(
+          eq(weeklyBatches.userId, userId),
+          eq(weeklyBatches.batchOrdinalInPeriod, periodWeek)
+        )
+      )
+      .limit(1);
+    if (byOrdinal) return byOrdinal;
+    // Fall through to the FIFO heuristic when the period-week slot
+    // hasn't been filled yet.
+  }
+
+  // Starter / Trial path, or Pro fallback: oldest scheduling/completed.
+  const [oldest] = await db
+    .select()
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        inArray(weeklyBatches.status, ["scheduling", "completed"])
+      )
+    )
+    .orderBy(asc(weeklyBatches.createdAt))
+    .limit(1);
+
+  return oldest ?? null;
 }
 
 /**

@@ -23,6 +23,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
 import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
@@ -49,6 +50,24 @@ import type { BatchForReview } from "@/lib/services/post-service";
  * The Stop button keeps its current bottom-of-page placement (deliberate
  * — the destructive distance-to-click is a feature, not a bug).
  */
+
+/**
+ * Heading for the live posting view (D-S2-17 follow-up). Pro batches carry
+ * `batchOrdinalInPeriod` 1..MAX_BATCHES_PER_PERIOD so the heading surfaces
+ * which slot in the current Pro period is mid-posting — the same number
+ * `<UnscheduledBatchCard />` and `<ScheduledBatchBox />` show in their strip
+ * labels, so the user can trace a batch from `/create` or `/schedule` to
+ * the locked view and see the matching ordinal.
+ *
+ * Trial / Starter batches have `batchOrdinalInPeriod === null` (those plans
+ * use lifetime / weekly caps, not a Pro-style 4-per-period ordinal). When
+ * null we omit the suffix entirely rather than rendering `Batch null/4`.
+ */
+function currentlyPostingHeading(ordinal: number | null): string {
+  const base = "Currently posting this week on your social media";
+  if (ordinal === null) return base;
+  return `${base} · Batch ${ordinal}/${MAX_BATCHES_PER_PERIOD}`;
+}
 
 /**
  * "Day N" terminology in the scheduled-for slot encodes the rolling 7-day
@@ -119,7 +138,7 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
           <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
             {isCancelled
               ? "Batch cancelled"
-              : "Your scheduled posts are here"}
+              : currentlyPostingHeading(data.batch.batchOrdinalInPeriod)}
           </h1>
           <p className="text-sm text-muted-foreground">
             {isCancelled
