@@ -57,6 +57,13 @@
       "when": 1780606656411,
       "tag": "0007_shiny_valkyrie",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781022317148,
+      "tag": "0008_charming_selene",
+      "breakpoints": true
     }
   ]
 }

@@ -140,6 +140,14 @@ export const profiles = pgTable(
     // Subset of ["facebook", "instagram", "linkedin"]. At least one required
     // (validated in the service layer, not at the DB).
     platforms: text("platforms").array().notNull(),
+    // Onboarding-posting-preferences: user's posting-days preference, seeded
+    // in onboarding and editable in Settings. Union "every_day" |
+    // "working_days_only" | "weekends_only", enforced at the service layer
+    // (matches the enum-as-text convention). NULL on legacy pre-migration
+    // rows — service-layer reads NULL as "every_day". weekly_batches has its
+    // own frozen-at-creation copy so Settings edits never retroactively
+    // shift past batches' calendars.
+    postingDays: text("posting_days"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -165,6 +173,13 @@ export const weeklyBatches = pgTable(
     theme: text("theme").notNull(),
     importantThing: text("important_thing").notNull(),
     totalPosts: integer("total_posts").default(7).notNull(),
+    // Onboarding-posting-preferences: calendar-span size in consecutive days
+    // (7 for trial/starter/Pro batches 1–3; 9 for the Pro monthly bonus batch
+    // 4). Decoupled from total_posts because posting_days filters can drop
+    // slots, so total_posts <= day_window under working_days_only or
+    // weekends_only. NULL on legacy rows — calendar reader falls back to
+    // total_posts (preserves the old every_day-equivalent behaviour).
+    dayWindow: integer("day_window"),
     // Pro-only: 1..4 ordinal slot this batch occupies within the user's
     // current 30-day Pro period (D-A9). Nullable because Starter/Trial batches
     // have no meaningful ordinal — the union {1,2,3,4} is enforced at the
@@ -174,9 +189,16 @@ export const weeklyBatches = pgTable(
     skippedPosts: integer("skipped_posts").default(0).notNull(),
     // Union: "in_progress" | "reviewing" | "scheduling" | "scheduled" | "completed".
     status: text("status").notNull(),
-    // Union: "short" | "medium" | "long" (PostLength). NULL = legacy Phase 2
+    // Union: "short" | "medium" | "long" | "mix" (PostLength; "mix" added in
+    // the onboarding-posting-preferences feature). NULL = legacy Phase 2
     // batch; render/prompt sites must treat NULL as "medium" for back-compat.
     postLength: text("post_length"),
+    // Onboarding-posting-preferences: frozen-at-creation copy of the user's
+    // posting_days preference. profiles.posting_days seeds it; later edits in
+    // Settings do NOT propagate back here so past batches stay stable. Union
+    // "every_day" | "working_days_only" | "weekends_only". NULL on legacy
+    // rows — calendar reader treats as "every_day".
+    postingDays: text("posting_days"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [index("weekly_batches_user_id_idx").on(table.userId)]
@@ -575,7 +597,13 @@ export type BatchStatus =
 export type PostStatus = "draft" | "accepted" | "edited" | "skipped";
 export type ImageSource = "ai" | "uploaded" | "library";
 export type SubscriptionPlan = "free_trial" | "starter" | "pro";
-export type PostLength = "short" | "medium" | "long";
+export type PostLength = "short" | "medium" | "long" | "mix";
+// Onboarding-posting-preferences: per-user (and per-batch) preference for
+// which calendar days within the batch window receive posts. "every_day"
+// keeps every slot; "working_days_only" drops Sat+Sun; "weekends_only" keeps
+// only Sat+Sun. Wave 1 stores the value; Wave 2 wires it into
+// resolveBatchPlan + ordinalToDate. NULL on legacy rows reads as "every_day".
+export type PostingDays = "every_day" | "working_days_only" | "weekends_only";
 export type SubscriptionStatus = "trial" | "active" | "cancelled" | "expired";
 export type BillingCycle = "monthly" | "yearly";
 export type ConnectedAccountStatus = "active" | "expired" | "disconnected";

@@ -52,12 +52,15 @@ export async function generateWeeklyAction(
   // Phase 3 task-08: Pro users pick via the segmented control; Starter and
   // trial users get a hidden `"medium"` input. Either way the field is
   // present here; this branch is defensive (a stale or hand-crafted client
-  // could omit it).
+  // could omit it). Onboarding-posting-preferences wave 1: "mix" is added
+  // to the accepted set as a typecheck-visible breadcrumb. Wave 2 wires
+  // the picker UI; until then no client submits "mix".
   const rawPostLength = formData.get("postLength");
   if (
     rawPostLength !== "short" &&
     rawPostLength !== "medium" &&
-    rawPostLength !== "long"
+    rawPostLength !== "long" &&
+    rawPostLength !== "mix"
   ) {
     return { error: "Pick a post length to continue." };
   }
@@ -87,6 +90,12 @@ export async function generateWeeklyAction(
     postLength,
     postCount,
     batchOrdinalInPeriod,
+    // Onboarding-posting-preferences wave 1 defaults. Wave 3 wires
+    // profile.postingDays here. day_window mirrors postCount for now —
+    // every_day means every slot is used, so the two are equal under the
+    // current (pre-Wave-2) generation logic.
+    dayWindow: postCount,
+    postingDays: "every_day",
   });
 
   if (result.ok) {

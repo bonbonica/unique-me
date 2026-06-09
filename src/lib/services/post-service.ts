@@ -8,6 +8,7 @@ import {
   type NewPostVariation,
   type Post,
   type PostLength,
+  type PostingDays,
   type PostVariation,
   type SelectionPlatform,
   type WeeklyBatch,
@@ -800,6 +801,17 @@ export async function generateWeekly(
     // for Trial and Starter batches. Searching for "Pro batches" later is
     // `WHERE batch_ordinal_in_period IS NOT NULL`.
     batchOrdinalInPeriod: number | null;
+    // Onboarding-posting-preferences: calendar-span size for the batch.
+    // Wave 1: just persisted onto the batch row. Wave 2 wires this into the
+    // resolveBatchPlan helper that drives variable post counts from the
+    // posting_days filter.
+    dayWindow: 7 | 9;
+    // Onboarding-posting-preferences: the user's posting-days preference,
+    // frozen onto the batch row at creation. Wave 1: just persisted. Wave 2
+    // uses this to filter the calendar slot list down to working / weekend
+    // days. Caller passes "every_day" as a hard-coded default until Wave 3
+    // wires profile.postingDays.
+    postingDays: PostingDays;
   }
 ): Promise<GenerateWeeklyResult> {
   const profile = await profileService.getProfile(userId);
@@ -836,6 +848,8 @@ export async function generateWeekly(
         acceptedPosts: 0,
         skippedPosts: 0,
         status: "reviewing",
+        dayWindow: input.dayWindow,
+        postingDays: input.postingDays,
       });
 
       const postRows = generated.posts.map((p) => ({

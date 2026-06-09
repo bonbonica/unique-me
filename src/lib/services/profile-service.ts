@@ -48,6 +48,14 @@ export const saveProfileSchema = z.object({
   businessDescription: z.string().min(1).max(2000),
   tonePreference: tonePreferenceSchema,
   platforms: z.array(platformSchema).min(1),
+  // Onboarding-posting-preferences: nullable + optional so existing callers
+  // (and the legacy rollout window before Wave 2 wires the onboarding form)
+  // can pass `undefined`. When `undefined`/`null`, the column is written as
+  // NULL; service-layer reads treat NULL as "every_day".
+  postingDays: z
+    .enum(["every_day", "working_days_only", "weekends_only"])
+    .nullable()
+    .optional(),
   websiteAnalysis: z
     .object({
       businessSummary: z.string(),
@@ -147,6 +155,7 @@ export async function saveProfile(
       businessDescription: data.businessDescription,
       tonePreference: data.tonePreference,
       platforms,
+      postingDays: data.postingDays ?? null,
     })
     .onConflictDoUpdate({
       target: profiles.userId,
@@ -158,6 +167,7 @@ export async function saveProfile(
         businessDescription: data.businessDescription,
         tonePreference: data.tonePreference,
         platforms,
+        postingDays: data.postingDays ?? null,
       },
     })
     .returning();
@@ -218,6 +228,11 @@ export async function updateProfile(
     set.tonePreference = data.tonePreference;
   }
   if (data.platforms !== undefined) set.platforms = data.platforms;
+  // Onboarding-posting-preferences: nullable in the schema. When the caller
+  // explicitly supplies `null`, that's the user clearing it back to "default".
+  if (data.postingDays !== undefined) {
+    set.postingDays = data.postingDays ?? null;
+  }
 
   const [row] = await db
     .update(profiles)

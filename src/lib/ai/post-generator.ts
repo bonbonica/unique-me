@@ -63,6 +63,17 @@ const LENGTH_DIRECTIVES: Record<PostLength, string> = {
     "5–8 sentences. Storytelling format — open with a hook, build context, " +
     "and land on a CTA. Aim for ~100–160 words. Use this length to earn " +
     "emotional weight, not to pad.",
+  // TODO(onboarding-posting-preferences wave 2): "mix" is the per-batch
+  // "vary the length across slots" mode. This Record becomes obsolete in
+  // Wave 2 when post-generator.generate accepts `lengths: PostLength[]`
+  // (one per slot) and emits per-slot directives. Until then no caller
+  // submits "mix" — the /create form picker won't expose it yet. The
+  // fallback to the medium directive here is a defensive Wave-1 placeholder
+  // so a forged or stale-tab submit can't crash generation. This entry must
+  // not survive Wave 2's refactor of LENGTH_DIRECTIVES.
+  mix:
+    "2–4 sentences. Conversational — a hook, one supporting line, and a CTA. " +
+    "Aim for ~40–70 words. This is the default cadence.",
 };
 
 /**
