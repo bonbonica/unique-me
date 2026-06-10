@@ -1,5 +1,10 @@
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import {
+  dayWindowOrFallback,
+  postingDaysOrFallback,
+} from "@/lib/scheduling/batch-calendar";
+import { ordinalToDate } from "@/lib/scheduling/ordinal-to-date";
 import type {
   Post,
   PostSelection,
@@ -177,21 +182,28 @@ function shape({
     }
   }
 
-  const batchCreatedMs = batch.createdAt.getTime();
-  const DAY_MS = 86_400_000;
-
-  // Per-ordinal fallback Date: `batch.createdAt + (postOrder - 1) days`. This
-  // is the SAME formula used as the column header day label today (and as the
-  // per-row scheduled time in the per-network sections). There are no
-  // per-network minute offsets in present-day data — those would be fiction
-  // without a `scheduled_posts` writer. When the future swap lands and real
-  // scheduled times exist, the column header reverts to `MIN(scheduledTime)`
-  // and per-row times use this `(postId, platform)`'s real `scheduledTime`.
+  // Per-ordinal fallback Date — the SAME formula used as the column header
+  // day label today (and as the per-row scheduled time in the per-network
+  // sections). There are no per-network minute offsets in present-day data —
+  // those would be fiction without a `scheduled_posts` writer. When the
+  // future swap lands and real scheduled times exist, the column header
+  // reverts to `MIN(scheduledTime)` and per-row times use this
+  // `(postId, platform)`'s real `scheduledTime`.
+  //
+  // Onboarding-posting-preferences (Wave 2): the ordinal→date mapping is no
+  // longer linear when `working_days_only` / `weekends_only` filters skip
+  // calendar days. `ordinalToDate` re-derives the filtered `dayOffsets` list
+  // via `resolveBatchPlan`. Legacy batches (NULL `dayWindow`, NULL
+  // `postingDays`) collapse to `every_day` semantics via the `*OrFallback`
+  // helpers, preserving the pre-feature behaviour.
+  const dayWindow = dayWindowOrFallback(batch);
+  const postingDays = postingDaysOrFallback(batch);
   const ordinalDate = (order: number): Date =>
-    new Date(batchCreatedMs + (order - 1) * DAY_MS);
+    ordinalToDate(batch.createdAt, order, dayWindow, postingDays);
 
   // ---------------------------------------------------------------------------
-  // 1. Columns — one per ordinal `1..batch.totalPosts`.
+  // 1. Columns — one per filtered slot `1..batch.totalPosts`. After Wave 2.3
+  // `batch.totalPosts` equals `dayOffsets.length` by construction.
   // ---------------------------------------------------------------------------
   const columns: GridColumn[] = [];
   for (let order = 1; order <= batch.totalPosts; order++) {

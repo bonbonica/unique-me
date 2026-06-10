@@ -29,6 +29,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { BUSINESS_TYPES } from "@/lib/profile/constants";
 import { type SubscriptionPlan, type WebsiteAnalysis } from "@/lib/schema";
+import { cn } from "@/lib/utils";
 
 /**
  * Onboarding form client component (Phase 1, spec § 1.4).
@@ -62,6 +63,7 @@ import { type SubscriptionPlan, type WebsiteAnalysis } from "@/lib/schema";
 
 type ToneValue = "casual" | "professional" | "mix" | "";
 type PlatformValue = "facebook" | "instagram" | "linkedin";
+type PostingDaysValue = "every_day" | "working_days_only" | "weekends_only";
 
 type FormValues = {
   businessName: string;
@@ -71,6 +73,7 @@ type FormValues = {
   businessDescription: string;
   tone: ToneValue;
   platforms: ReadonlyArray<PlatformValue>;
+  postingDays: PostingDaysValue;
 };
 
 /**
@@ -97,7 +100,17 @@ const INITIAL_VALUES: FormValues = {
   businessDescription: "",
   tone: "",
   platforms: [],
+  postingDays: "every_day",
 };
+
+const POSTING_DAYS_OPTIONS: ReadonlyArray<{
+  value: PostingDaysValue;
+  label: string;
+}> = [
+  { value: "every_day", label: "Every day" },
+  { value: "working_days_only", label: "Working days only" },
+  { value: "weekends_only", label: "Weekends only" },
+];
 
 const INITIAL_STATE: OnboardingState = { ok: false };
 
@@ -193,6 +206,7 @@ export function OnboardingForm({ plan }: OnboardingFormProps) {
   const idBusinessType = useId();
   const idDescription = useId();
   const idTone = useId();
+  const idPostingDays = useId();
 
   /**
    * Reset everything analysis-related. Called when the user toggles
@@ -529,6 +543,55 @@ export function OnboardingForm({ plan }: OnboardingFormProps) {
           />
           <span>I don&apos;t have a website yet</span>
         </label>
+      </div>
+
+      {/* Posting days ----------------------------------------------------- */}
+      {/* Segmented radio group built on native <input type="radio"> — same
+          a11y pattern as the /create PostLengthPicker. Default selection is
+          "every_day" so the value is always non-empty; canSubmit therefore
+          needs no additional gate for this field. */}
+      <div>
+        <span
+          id={idPostingDays}
+          className="block text-sm font-medium mb-2"
+        >
+          Posting days
+        </span>
+        <div
+          role="radiogroup"
+          aria-labelledby={idPostingDays}
+          className="inline-flex flex-wrap rounded-full bg-muted p-1 border border-border"
+        >
+          {POSTING_DAYS_OPTIONS.map((option) => {
+            const selected = values.postingDays === option.value;
+            return (
+              <label key={option.value} className="relative cursor-pointer">
+                <input
+                  type="radio"
+                  name="posting_days"
+                  value={option.value}
+                  checked={selected}
+                  onChange={() => update("postingDays", option.value)}
+                  className="peer sr-only"
+                />
+                <span
+                  className={cn(
+                    "block px-5 py-2 rounded-full text-sm font-medium transition-colors duration-200",
+                    "peer-focus-visible:ring-[3px] peer-focus-visible:ring-ring/30 peer-focus-visible:outline-none",
+                    selected
+                      ? "bg-primary text-primary-foreground"
+                      : "text-foreground hover:bg-accent/40"
+                  )}
+                >
+                  {option.label}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          Sets your default. Editable any time in Settings.
+        </p>
       </div>
 
       {/* 3. Business type -------------------------------------------------- */}

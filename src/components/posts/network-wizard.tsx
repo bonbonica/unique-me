@@ -9,6 +9,10 @@ import {
 import { WizardNav } from "@/components/posts/wizard-nav";
 import { WizardStep } from "@/components/posts/wizard-step";
 import { WizardSummary } from "@/components/posts/wizard-summary";
+import {
+  dayWindowOrFallback,
+  postingDaysOrFallback,
+} from "@/lib/scheduling/batch-calendar";
 import type { SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
@@ -208,6 +212,8 @@ export function NetworkWizard({
           posts={data.posts}
           batchTheme={data.batch.theme}
           batchCreatedAt={data.batch.createdAt}
+          dayWindow={dayWindowOrFallback(data.batch)}
+          postingDays={postingDaysOrFallback(data.batch)}
           selections={selections}
           onSetSelection={setSelection}
           onSelectAllForPlatform={selectAllForPlatform}

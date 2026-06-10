@@ -69,8 +69,8 @@ export function TrialGatedScreen({
         You&apos;ve used your trial batch
       </h1>
       <p className="text-base text-muted-foreground leading-7">
-        Your 7-day Pro trial includes one batch of 7 posts. Upgrade to keep
-        creating.
+        Your 7-day Pro trial includes one batch of up to 7 posts. Upgrade to
+        keep creating.
       </p>
       <div className="flex flex-col gap-3">
         <Button asChild size="lg" className="rounded-full glow-champagne">

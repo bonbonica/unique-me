@@ -14,7 +14,7 @@ import {
 import { RegenerateDialog } from "@/components/posts/regenerate-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
-import type { SelectionPlatform } from "@/lib/schema";
+import type { PostingDays, SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
 
@@ -71,6 +71,8 @@ export function WizardStep({
   platform,
   posts,
   batchCreatedAt,
+  dayWindow,
+  postingDays,
   selections,
   onSetSelection,
   onSelectAllForPlatform,
@@ -81,6 +83,8 @@ export function WizardStep({
   posts: BatchForReview["posts"];
   batchTheme: string;
   batchCreatedAt: Date;
+  dayWindow: number;
+  postingDays: PostingDays;
   selections: SelectionsByPlatform;
   onSetSelection: (
     postId: string,
@@ -185,6 +189,8 @@ export function WizardStep({
             post={post}
             platform={platform}
             batchCreatedAt={batchCreatedAt}
+            dayWindow={dayWindow}
+            postingDays={postingDays}
             totalPosts={totalPosts}
             isSelected={selectedIds.includes(post.id)}
             onToggle={(next) => onSetSelection(post.id, platform, next)}
@@ -200,6 +206,8 @@ function PostCard({
   post,
   platform,
   batchCreatedAt,
+  dayWindow,
+  postingDays,
   totalPosts,
   isSelected,
   onToggle,
@@ -208,6 +216,8 @@ function PostCard({
   post: PostWithExtras;
   platform: SelectionPlatform;
   batchCreatedAt: Date;
+  dayWindow: number;
+  postingDays: PostingDays;
   totalPosts: number;
   isSelected: boolean;
   onToggle: (next: boolean) => void;
@@ -240,6 +250,8 @@ function PostCard({
         <DayLabel
           postOrder={post.postOrder}
           batchCreatedAt={batchCreatedAt}
+          dayWindow={dayWindow}
+          postingDays={postingDays}
         />
         {NETWORK_ICON[platform]}
       </div>

@@ -199,6 +199,12 @@ const onboardingFormSchema = z
     platforms: z
       .array(z.enum(["facebook", "instagram", "linkedin"]))
       .min(1, "Choose at least one platform."),
+    // Wave 2 task-03: persisted on `profiles.posting_days` (Wave 1 column).
+    // Defaults to `every_day` so legacy form submits that omit the field
+    // (forged or proxy-stripped) land on the same value as the UI default.
+    posting_days: z
+      .enum(["every_day", "working_days_only", "weekends_only"])
+      .default("every_day"),
   })
   .refine(
     (data) => data.has_no_website || (data.website_url && data.website_url.length > 0),
@@ -263,6 +269,9 @@ export async function saveOnboardingAction(
       formData.get("business_description")?.toString() ?? "",
     tone_preference: formData.get("tone_preference")?.toString() ?? "",
     platforms: formData.getAll("platforms").map((v) => v.toString()),
+    // Pass `undefined` (not "") when the field is missing so the schema's
+    // `.default("every_day")` kicks in — a Zod enum rejects empty strings.
+    posting_days: formData.get("posting_days")?.toString() || undefined,
   };
 
   const parsed = onboardingFormSchema.safeParse(raw);
@@ -350,6 +359,7 @@ export async function saveOnboardingAction(
     tonePreference: form.tone_preference,
     platforms: form.platforms,
     websiteAnalysis,
+    postingDays: form.posting_days,
   };
 
   try {

@@ -54,11 +54,10 @@ export function GenerateForm({
     FormData
   >(generateWeeklyAction, INITIAL_GENERATE_STATE);
 
-  // Only Pro users see the picker; tracks selection so the submit button can
-  // stay disabled until the user makes an explicit choice (D7: no default).
-  const [postLength, setPostLength] = useState<PostLength | null>(null);
+  // Only Pro users see the picker. Mix is preselected for everyone (spec §6)
+  // so the submit button never needs a null-gate — length always has a value.
+  const [postLength, setPostLength] = useState<PostLength>("mix");
   const isPro = plan === "pro";
-  const submitDisabled = isPro && postLength === null;
 
   if (pending) {
     return <GeneratingState />;
@@ -99,7 +98,7 @@ export function GenerateForm({
       {isPro ? (
         <PostLengthPicker value={postLength} onChange={setPostLength} />
       ) : (
-        <input type="hidden" name="postLength" value="medium" />
+        <input type="hidden" name="postLength" value="mix" />
       )}
 
       {state.error ? (
@@ -114,7 +113,6 @@ export function GenerateForm({
       <Button
         type="submit"
         size="lg"
-        disabled={submitDisabled}
         className="w-full sm:w-auto rounded-full glow-champagne"
       >
         {pending ? (
@@ -134,12 +132,17 @@ export function GenerateForm({
 // Post-length picker (Pro-only)
 // =============================================================================
 
-const POST_LENGTH_OPTIONS: ReadonlyArray<{ value: PostLength; label: string }> =
-  [
-    { value: "short", label: "Short" },
-    { value: "medium", label: "Medium" },
-    { value: "long", label: "Long" },
-  ];
+const POST_LENGTH_OPTIONS: ReadonlyArray<{
+  value: PostLength;
+  label: string;
+  // Marks the recommended option. Only ever true for "mix" in v1.
+  recommended?: boolean;
+}> = [
+  { value: "short", label: "Short" },
+  { value: "medium", label: "Medium" },
+  { value: "long", label: "Long" },
+  { value: "mix", label: "Mix", recommended: true },
+];
 
 /**
  * Segmented control built on native `<input type="radio">` so arrow-key
@@ -152,7 +155,7 @@ function PostLengthPicker({
   value,
   onChange,
 }: {
-  value: PostLength | null;
+  value: PostLength;
   onChange: (next: PostLength) => void;
 }) {
   return (
@@ -195,13 +198,19 @@ function PostLengthPicker({
                 )}
               >
                 {option.label}
+                {option.recommended ? (
+                  <span className="ml-1.5 text-xs opacity-70">
+                    (Recommended)
+                  </span>
+                ) : null}
               </span>
             </label>
           );
         })}
       </div>
       <p className="mt-2 text-xs text-muted-foreground">
-        Short = scroll-stopper · Medium = conversational · Long = storytelling.
+        Short = scroll-stopper · Medium = conversational · Long = storytelling ·
+        Mix = a balanced rotation.
       </p>
     </div>
   );

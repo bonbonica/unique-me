@@ -97,11 +97,13 @@ const SCHEMA_SQL = `
     theme text NOT NULL,
     important_thing text NOT NULL,
     total_posts integer NOT NULL DEFAULT 7,
+    day_window integer,
     batch_ordinal_in_period integer,
     accepted_posts integer NOT NULL DEFAULT 0,
     skipped_posts integer NOT NULL DEFAULT 0,
     status text NOT NULL,
     post_length text,
+    posting_days text,
     created_at timestamp NOT NULL DEFAULT now()
   );
 `;

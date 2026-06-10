@@ -24,7 +24,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
-import type { SelectionPlatform } from "@/lib/schema";
+import {
+  dayWindowOrFallback,
+  postingDaysOrFallback,
+} from "@/lib/scheduling/batch-calendar";
+import type { PostingDays, SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
 /**
@@ -204,6 +208,8 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
               item={item}
               batchCreatedAt={data.batch.createdAt}
               totalPosts={data.batch.totalPosts}
+              dayWindow={dayWindowOrFallback(data.batch)}
+              postingDays={postingDaysOrFallback(data.batch)}
             />
           ))}
         </ul>
@@ -239,10 +245,14 @@ function LockedCard({
   item,
   batchCreatedAt,
   totalPosts,
+  dayWindow,
+  postingDays,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
   totalPosts: number;
+  dayWindow: number;
+  postingDays: PostingDays;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -266,7 +276,8 @@ function LockedCard({
       </div>
 
       {/* Phase-4 date slot. `<DayLabel />` resolves the weekday in the
-          user's browser timezone (Phase 3 spec D8). The trailing
+          user's browser timezone (Phase 3 spec D8) via the same
+          filtered-offsets list `resolveBatchPlan` produces. The trailing
           "scheduled time pending" is the Phase-2 holding copy; Phase 4
           will swap it for the real time once the calendar / cron lands. */}
       <p className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -275,6 +286,8 @@ function LockedCard({
           <DayLabel
             postOrder={post.postOrder}
             batchCreatedAt={batchCreatedAt}
+            dayWindow={dayWindow}
+            postingDays={postingDays}
           />{" "}
           — {SCHEDULED_TIME_PLACEHOLDER}
         </span>

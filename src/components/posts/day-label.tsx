@@ -1,6 +1,8 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import { ordinalToDate } from "@/lib/scheduling/ordinal-to-date";
+import type { PostingDays } from "@/lib/schema";
 
 /**
  * `<DayLabel />` — renders "Day N · Weekday" for a single post within a
@@ -16,17 +18,29 @@ import { useSyncExternalStore } from "react";
  *
  * Order is "Day N · Weekday" — locked. Users scan-read the day number
  * first ("how far through the week am I?"), the weekday is the qualifier.
+ *
+ * Onboarding-posting-preferences (Wave 2): `dayWindow` and `postingDays`
+ * are required so the weekday lookup uses the same filtered-offsets list
+ * `<NetworkDayGrid />` and `resolveBatchPlan` use — under
+ * `working_days_only` or `weekends_only` the slot ordinal no longer maps
+ * linearly to calendar days. Callsites collapse legacy NULLs via
+ * `dayWindowOrFallback` / `postingDaysOrFallback` so the prop is
+ * always non-null.
  */
 export function DayLabel({
   postOrder,
   batchCreatedAt,
+  dayWindow,
+  postingDays,
 }: {
   postOrder: number;
   batchCreatedAt: Date | string;
+  dayWindow: number;
+  postingDays: PostingDays;
 }) {
   const mounted = useHasMounted();
   const label = mounted
-    ? buildDayLabel(postOrder, batchCreatedAt)
+    ? buildDayLabel(postOrder, batchCreatedAt, dayWindow, postingDays)
     : `Day ${postOrder}`;
 
   return (
@@ -55,19 +69,27 @@ function useHasMounted(): boolean {
  * component/hook bodies, and gating this call behind `mounted` already
  * guarantees it runs only on the client after hydration.
  *
- * DST drift across 6 days is at most 1 hour, which never changes the
- * weekday, so the plain `+ (postOrder - 1) * 86_400_000` math is safe and
- * keeps us off any date-library dependency.
+ * DST drift across up to 9 days is at most 1 hour, which never changes
+ * the weekday, so the underlying `+ offset * 86_400_000` math inside
+ * `ordinalToDate` is safe and keeps us off any date-library dependency.
  */
 function buildDayLabel(
   postOrder: number,
   batchCreatedAt: Date | string,
+  dayWindow: number,
+  postingDays: PostingDays,
 ): string {
   const base =
     batchCreatedAt instanceof Date
       ? batchCreatedAt
       : new Date(batchCreatedAt);
-  const dayDate = new Date(base.getTime() + (postOrder - 1) * 86_400_000);
+  // `dayWindow` is widened to `number` on the prop boundary so callsites
+  // don't have to thread a literal-typed `7 | 9` through five layers of
+  // prop drilling. `dayWindowOrFallback` only ever returns `7` or `9`,
+  // so the runtime narrowing here is a no-op for normal callsites; the
+  // ternary collapses any other value to `7` defensively.
+  const narrowedWindow: 7 | 9 = dayWindow === 9 ? 9 : 7;
+  const dayDate = ordinalToDate(base, postOrder, narrowedWindow, postingDays);
   const weekday = new Intl.DateTimeFormat(undefined, {
     weekday: "short",
   }).format(dayDate);

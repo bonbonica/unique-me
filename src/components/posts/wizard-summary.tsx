@@ -27,7 +27,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import type { SelectionPlatform } from "@/lib/schema";
+import {
+  dayWindowOrFallback,
+  postingDaysOrFallback,
+} from "@/lib/scheduling/batch-calendar";
+import type { PostingDays, SelectionPlatform } from "@/lib/schema";
 import type { BatchForReview } from "@/lib/services/post-service";
 
 /**
@@ -209,6 +213,8 @@ export function WizardSummary({
                 item={item}
                 batchCreatedAt={batch.createdAt}
                 totalPosts={batch.totalPosts}
+                dayWindow={dayWindowOrFallback(batch)}
+                postingDays={postingDaysOrFallback(batch)}
                 onRemove={() => handleRemove(item)}
               />
             ))}
@@ -296,11 +302,15 @@ function SummaryCard({
   item,
   batchCreatedAt,
   totalPosts,
+  dayWindow,
+  postingDays,
   onRemove,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
   totalPosts: number;
+  dayWindow: number;
+  postingDays: PostingDays;
   onRemove: () => void;
 }) {
   const { post, platform } = item;
@@ -317,6 +327,8 @@ function SummaryCard({
         <DayLabel
           postOrder={post.postOrder}
           batchCreatedAt={batchCreatedAt}
+          dayWindow={dayWindow}
+          postingDays={postingDays}
         />
         <NetworkBadge platform={platform} />
       </div>

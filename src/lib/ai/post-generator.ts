@@ -39,8 +39,12 @@ const REGEN_TOOL_NAME = "regenerate_one_post";
 // =============================================================================
 
 /**
- * Per-`PostLength` directive paragraph. Selected at prompt-build time based on
- * the value the caller resolved (NULL / undefined → "medium" — see callers).
+ * Per-slot length directive paragraph. Keyed by the concrete `PostLength`
+ * subset (Mix is resolved up-stream into a per-slot array of these three
+ * values — see `resolveLengthsForBatch` in `@/lib/scheduling/batch-calendar`),
+ * so `"mix"` is intentionally absent from the Record. If a caller ever
+ * passes `"mix"` here it's a programming error; the type system enforces
+ * the exclusion via the `Exclude<PostLength, "mix">` keying.
  *
  * The word counts are advisory only; the wizard tolerates arbitrary-length
  * captions (Phase 2 R12 word wrap) and the Zod validator below still caps the
@@ -52,7 +56,9 @@ const REGEN_TOOL_NAME = "regenerate_one_post";
  * far enough from HASHTAG / VARIATION rules that it doesn't get crossed with
  * platform-specific instructions.
  */
-const LENGTH_DIRECTIVES: Record<PostLength, string> = {
+type ConcretePostLength = Exclude<PostLength, "mix">;
+
+const LENGTH_DIRECTIVES: Record<ConcretePostLength, string> = {
   short:
     "Keep each caption to 1–2 sentences. Built to scroll-stop on mobile. " +
     "Aim for ~25 words max — every word earns its place.",
@@ -63,18 +69,58 @@ const LENGTH_DIRECTIVES: Record<PostLength, string> = {
     "5–8 sentences. Storytelling format — open with a hook, build context, " +
     "and land on a CTA. Aim for ~100–160 words. Use this length to earn " +
     "emotional weight, not to pad.",
-  // TODO(onboarding-posting-preferences wave 2): "mix" is the per-batch
-  // "vary the length across slots" mode. This Record becomes obsolete in
-  // Wave 2 when post-generator.generate accepts `lengths: PostLength[]`
-  // (one per slot) and emits per-slot directives. Until then no caller
-  // submits "mix" — the /create form picker won't expose it yet. The
-  // fallback to the medium directive here is a defensive Wave-1 placeholder
-  // so a forged or stale-tab submit can't crash generation. This entry must
-  // not survive Wave 2's refactor of LENGTH_DIRECTIVES.
-  mix:
-    "2–4 sentences. Conversational — a hook, one supporting line, and a CTA. " +
-    "Aim for ~40–70 words. This is the default cadence.",
 };
+
+/**
+ * Trailing paragraph applied after both the global LENGTH directive and the
+ * per-slot LENGTH PLAN — keeps the platform-variation behaviour identical
+ * regardless of which branch built the section.
+ */
+const LENGTH_TRAILER =
+  "Apply this length target to the canonical Facebook caption. Instagram and\n" +
+  "LinkedIn variations should still respect their own platform conventions\n" +
+  "above, but tilt in the same direction (short → tighter variations; long →\n" +
+  "more room to breathe).\n\n";
+
+const LENGTH_TRAILER_PER_SLOT =
+  "Apply each slot's length target to its canonical Facebook caption.\n" +
+  "Instagram and LinkedIn variations should still respect their own platform\n" +
+  "conventions above, but tilt in the same direction (short → tighter\n" +
+  "variations; long → more room to breathe).\n\n";
+
+/**
+ * Render the LENGTH section. Uniform `lengths` produce a single global
+ * directive; mixed `lengths` produce a per-slot LENGTH PLAN. The Set-size
+ * check is the lowest-overhead way to detect uniformity (3-element ceiling
+ * on the universe of values) without sorting / comparing the array.
+ */
+function buildLengthSection(lengths: ConcretePostLength[]): string {
+  if (lengths.length === 0) return "";
+
+  const unique = new Set(lengths);
+  if (unique.size === 1) {
+    // Backwards-compatible single-directive form. The first element is the
+    // only element when the Set collapsed to one value.
+    const only = lengths[0] as ConcretePostLength;
+    return "LENGTH:\n" + LENGTH_DIRECTIVES[only] + "\n" + LENGTH_TRAILER;
+  }
+
+  // Per-slot plan. Lines are 1-indexed so they line up with the
+  // `postOrder: 1..N` field the tool schema enforces.
+  const planLines = lengths
+    .map((slotLength, idx) => {
+      const ordinal = idx + 1;
+      return `- Post ${ordinal}: ${slotLength} — ${LENGTH_DIRECTIVES[slotLength]}`;
+    })
+    .join("\n");
+
+  return (
+    "LENGTH PLAN — apply per slot:\n" +
+    planLines +
+    "\n\n" +
+    LENGTH_TRAILER_PER_SLOT
+  );
+}
 
 /**
  * Build the system prompt for both `generate` and `regenerateOne`. The brand
@@ -85,13 +131,18 @@ const LENGTH_DIRECTIVES: Record<PostLength, string> = {
  * failed during onboarding) we skip the entire brand-summary block so the
  * model doesn't see empty `{{}}` placeholders.
  *
- * `postLength` shapes a single appended LENGTH directive paragraph; the rest
- * of the prompt is unchanged regardless of length so platform / tone / hashtag
- * rules stay stable across batches.
+ * `lengths` shapes the appended LENGTH section. When every slot shares the
+ * same length (short / medium / long for the entire batch) we emit a single
+ * global LENGTH directive — same shape as pre-Wave-2 batches. When lengths
+ * vary (the Mix case, resolved up-stream into a per-slot array via
+ * `resolveLengthsForBatch`) we emit a LENGTH PLAN block listing each slot's
+ * target so the model writes to the assigned shape post-by-post. Either way
+ * the rest of the prompt is unchanged so platform / tone / hashtag rules stay
+ * stable across batches.
  */
 function buildSystemPrompt(
   profile: Profile,
-  postLength: PostLength,
+  lengths: ConcretePostLength[],
   postCount: 7 | 9
 ): string {
   const base =
@@ -158,13 +209,7 @@ function buildSystemPrompt(
     "- Avoid generic AI phrases: \"in today's fast-paced world\", \"leverage\", \"unlock the power of\", etc.\n" +
     "- Avoid corporate-speak unless the brand is explicitly corporate.\n" +
     "- Write the way a small-business owner with a strong personal voice would write.\n\n" +
-    "LENGTH:\n" +
-    LENGTH_DIRECTIVES[postLength] +
-    "\n" +
-    "Apply this length target to the canonical Facebook caption. Instagram and\n" +
-    "LinkedIn variations should still respect their own platform conventions\n" +
-    "above, but tilt in the same direction (short → tighter variations; long →\n" +
-    "more room to breathe).\n\n" +
+    buildLengthSection(lengths) +
     "HASHTAG RULES:\n" +
     "- Canonical (Facebook): 3-8 hashtags.\n" +
     "- Instagram variation: 8-30 hashtags, mix of broad reach + niche.\n" +
@@ -303,23 +348,39 @@ export async function generate(args: {
   profile: Profile;
   theme: string;
   importantThing: string;
-  // Per spec D7: per-batch, Pro-only UI choice; Starter / Trial default to
-  // "medium". The generator itself is plan-agnostic — callers resolve the
-  // value. NULL / undefined ≡ "medium" for back-compat with Phase 2 batches
-  // generated before this column existed.
-  postLength?: PostLength;
-  // Per Phase 4 spec: 7 for a normal weekly batch, 9 for the Pro monthly
-  // bonus batch (the 4th batch in a 30-day window for a Pro user). Required
-  // — no default — so the caller is forced to make the decision explicitly
-  // (a silent default would let batch 4 fail Zod re-validation on count).
-  postCount: 7 | 9;
+  // Per-slot length array. One entry per post in the batch; MUST NOT contain
+  // `"mix"` — Mix is resolved up-stream by `resolveLengthsForBatch` into a
+  // concrete `short | medium | long` per slot. `args.lengths.length` is the
+  // batch's post count (the previous `postCount` parameter is gone — the
+  // array IS the source of truth, including for tool-schema bounds).
+  lengths: PostLength[];
 }): Promise<Generated | null> {
   try {
-    const resolvedLength: PostLength = args.postLength ?? "medium";
+    // TODO(onboarding-posting-preferences wave 3): broaden to any 1 <= N <= 9
+    // when generateWeeklyAction starts passing profile.postingDays. The 7-or-9
+    // narrow today is correct under the current "every_day"-hardcoded action;
+    // flipping it to a generic 1..9 range is Wave 3's job.
+    const postCount = args.lengths.length;
+    if (postCount !== 7 && postCount !== 9) {
+      console.warn(
+        `[post-generator] generate: unexpected lengths.length=${postCount}; ` +
+          `Wave 2 only supports 7 or 9. Returning null.`
+      );
+      return null;
+    }
+
+    // Defensive: lengths should never contain "mix" — `resolveLengthsForBatch`
+    // resolves Mix to per-slot concrete values. If the type system ever lets
+    // one through (e.g. a forged-tab post-mortem), fall the slot back to
+    // "medium" rather than throw.
+    const concreteLengths: ConcretePostLength[] = args.lengths.map((l) =>
+      l === "mix" ? "medium" : l
+    );
+
     const systemText = buildSystemPrompt(
       args.profile,
-      resolvedLength,
-      args.postCount
+      concreteLengths,
+      postCount
     );
 
     // Built per-call because `minItems` / `maxItems` / `postOrder.maximum`
@@ -327,21 +388,21 @@ export async function generate(args: {
     // numbers, not interpolated strings.
     const postGenerationTool: Anthropic.Tool = {
       name: TOOL_NAME,
-      description: `Persist the week's ${args.postCount} social media posts.`,
+      description: `Persist the week's ${postCount} social media posts.`,
       input_schema: {
         type: "object",
         properties: {
           posts: {
             type: "array",
-            minItems: args.postCount,
-            maxItems: args.postCount,
+            minItems: postCount,
+            maxItems: postCount,
             items: {
               type: "object",
               properties: {
                 postOrder: {
                   type: "integer",
                   minimum: 1,
-                  maximum: args.postCount,
+                  maximum: postCount,
                 },
                 postText: { type: "string", minLength: 20, maxLength: 2200 },
                 hashtags: {
@@ -396,7 +457,7 @@ export async function generate(args: {
       },
     };
 
-    // Per-call Zod schema closes over `args.postCount`. The exported
+    // Per-call Zod schema closes over the derived `postCount`. The exported
     // `Generated` type is derived from `generatedShape` at module scope
     // (loose, no length constraint); applying `.length()` here narrows the
     // runtime check without changing the static shape callers see.
@@ -404,10 +465,10 @@ export async function generate(args: {
       posts: z
         .array(
           postObjectSchema.extend({
-            postOrder: z.number().int().min(1).max(args.postCount),
+            postOrder: z.number().int().min(1).max(postCount),
           })
         )
-        .length(args.postCount),
+        .length(postCount),
     });
 
     const response = await anthropic.messages.create({
@@ -423,7 +484,7 @@ export async function generate(args: {
             "THIS WEEK'S BRIEF:\n" +
             `- Theme: ${args.theme}\n` +
             `- The important thing to highlight: ${args.importantThing}\n\n` +
-            `Generate exactly ${args.postCount} posts (postOrder 1 through ${args.postCount}). For each post ` +
+            `Generate exactly ${postCount} posts (postOrder 1 through ${postCount}). For each post ` +
             "include an Instagram variation and a LinkedIn variation per the " +
             "rules in the system prompt.",
         },
@@ -490,9 +551,12 @@ export async function regenerateOne(args: {
   feedback: string;
   postOrder: number;
   // Same semantics as `generate`: undefined ≡ "medium". Callers (postService
-  // .regenerate) should pass the parent batch's stored postLength so the
-  // rewrite stays consistent with the surrounding posts.
-  postLength?: PostLength;
+  // .regenerate) should pass the parent slot's resolved length so the rewrite
+  // stays consistent with the surrounding posts. For Mix batches the caller
+  // looks up the per-slot length via `resolveLengthsForBatch` and passes the
+  // concrete value here — `regenerateOne` itself never sees `"mix"`, which is
+  // enforced by the `Exclude<PostLength, "mix">` parameter type.
+  postLength?: Exclude<PostLength, "mix">;
   // Size of the parent batch (7 for a normal weekly batch, 9 for the Pro
   // monthly bonus batch). Used so the user message ("post X of N") and the
   // system prompt reflect the correct total. Required — same rationale as
@@ -500,10 +564,14 @@ export async function regenerateOne(args: {
   postCount: 7 | 9;
 }): Promise<RegeneratedOne | null> {
   try {
-    const resolvedLength: PostLength = args.postLength ?? "medium";
+    const resolvedLength: ConcretePostLength = args.postLength ?? "medium";
+    // The system prompt's LENGTH section is built from a uniform single-slot
+    // array — same global-directive shape the original (pre-Wave-2)
+    // `regenerateOne` produced. The `postCount` value drives the angle-variety
+    // and "post X of N" framing only.
     const systemText = buildSystemPrompt(
       args.profile,
-      resolvedLength,
+      [resolvedLength],
       args.postCount
     );
 

@@ -5,6 +5,10 @@ import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
 import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
 import {
+  resolveBatchPlan,
+  resolveLengthsForBatch,
+} from "@/lib/scheduling/batch-calendar";
+import {
   type NewPostVariation,
   type Post,
   type PostLength,
@@ -793,24 +797,27 @@ export async function generateWeekly(
     theme: string;
     importantThing: string;
     postLength: PostLength;
-    // Phase 4: 7 for trial / Starter / Pro batches 1–3; 9 for the Pro monthly
-    // bonus (batch 4 in a 30-day window). Caller (/create server action)
-    // computes and trusts the value — single-responsibility.
+    // Wave 1 legacy — Wave 2 derives the real count from resolveBatchPlan(now,
+    // dayWindow, postingDays). Today the action still passes this for back-compat
+    // under "every_day" where postCount === totalPosts === dayWindow. Wave 3
+    // task 8 will remove it once generateWeeklyAction is wired to profile.postingDays.
     postCount: 7 | 9;
     // Phase 4: 1..4 for Pro batches within the current 30-day period; null
     // for Trial and Starter batches. Searching for "Pro batches" later is
     // `WHERE batch_ordinal_in_period IS NOT NULL`.
     batchOrdinalInPeriod: number | null;
     // Onboarding-posting-preferences: calendar-span size for the batch.
-    // Wave 1: just persisted onto the batch row. Wave 2 wires this into the
-    // resolveBatchPlan helper that drives variable post counts from the
-    // posting_days filter.
+    // Wave 2 makes this load-bearing — it drives `resolveBatchPlan`, which
+    // filters the day window down to the days `postingDays` admits. Under
+    // the action's still-hardcoded `postingDays: "every_day"`,
+    // `dayWindow === totalPosts === postCount`, so behaviour is byte-identical
+    // to Wave 1.
     dayWindow: 7 | 9;
     // Onboarding-posting-preferences: the user's posting-days preference,
-    // frozen onto the batch row at creation. Wave 1: just persisted. Wave 2
-    // uses this to filter the calendar slot list down to working / weekend
-    // days. Caller passes "every_day" as a hard-coded default until Wave 3
-    // wires profile.postingDays.
+    // frozen onto the batch row at creation. Wave 2 uses this to filter the
+    // calendar slot list down to working / weekend days. Caller passes
+    // "every_day" as a hard-coded default until Wave 3 wires
+    // profile.postingDays.
     postingDays: PostingDays;
   }
 ): Promise<GenerateWeeklyResult> {
@@ -825,25 +832,49 @@ export async function generateWeekly(
   // TODO(phase-3-gating): credit gate for non-trial users will live behind
   // subscriptionService.canGenerate. Trial users are already gated by D20.
 
+  // Calendar plan resolution (onboarding-posting-preferences §3). Under the
+  // current action that passes `postingDays: "every_day"`, this is a no-op
+  // filter and `totalPosts === input.dayWindow === input.postCount`. When
+  // Wave 3 flips the action to pass `profile.postingDays`, this is where
+  // working-days / weekends-only batches collapse to their filtered length.
+  const plan = resolveBatchPlan(
+    new Date(),
+    input.dayWindow,
+    input.postingDays
+  );
+  const totalPosts = plan.totalPosts;
+
+  // Allocate the batch id BEFORE the AI call so it can seed the Mix shuffle.
+  // The same id is the seed for `resolveLengthsForBatch` AND the
+  // `weekly_batches.id` of the inserted row — keeping them in sync lets a
+  // later single-post regenerate re-derive the exact same per-slot length
+  // sequence without any DB lookup.
+  const batchId = crypto.randomUUID();
+  const lengths = resolveLengthsForBatch(
+    totalPosts,
+    input.postLength,
+    batchId
+  );
+
   const generated = await postGenerator.generate({
     profile,
     theme: input.theme,
     importantThing: input.importantThing,
-    postLength: input.postLength,
-    postCount: input.postCount,
+    lengths,
   });
   if (!generated) return { ok: false, error: "ai_failed" };
 
   try {
     const result = await db.transaction(async (tx) => {
-      const batchId = crypto.randomUUID();
       await tx.insert(weeklyBatches).values({
         id: batchId,
         userId,
         theme: input.theme,
         importantThing: input.importantThing,
         postLength: input.postLength,
-        totalPosts: input.postCount,
+        // Filtered count from the calendar plan — NOT input.postCount. The
+        // two diverge once `postingDays` is anything other than "every_day".
+        totalPosts,
         batchOrdinalInPeriod: input.batchOrdinalInPeriod,
         acceptedPosts: 0,
         skippedPosts: 0,
@@ -902,7 +933,7 @@ export async function generateWeekly(
     return {
       ok: true,
       batchId: result.batchId,
-      postsCreated: input.postCount,
+      postsCreated: totalPosts,
       variationsCreated: result.variationsCreated,
     };
   } catch (err) {
@@ -997,6 +1028,7 @@ export async function regenerate(
   const [row] = await db
     .select({
       post: posts,
+      batchId: weeklyBatches.id,
       batchStatus: weeklyBatches.status,
       batchTheme: weeklyBatches.theme,
       batchImportant: weeklyBatches.importantThing,
@@ -1029,6 +1061,30 @@ export async function regenerate(
   // Defensive narrow rejects unexpected stored values.
   const postCount: 7 | 9 = row.batchTotalPosts === 9 ? 9 : 7;
 
+  // For a Mix batch the per-slot length is deterministic given
+  // `(totalPosts, "mix", batchId)` — see `resolveLengthsForBatch`. We re-derive
+  // the same array here so a regenerated post lands on the same length as the
+  // original slot, keeping the batch's overall 2/3/2 (or N-table) shape intact.
+  // For non-Mix batches the stored length is the per-slot length unchanged.
+  const storedLength = (row.batchPostLength as PostLength | null) ?? "medium";
+  let perSlotLength: Exclude<PostLength, "mix">;
+  if (storedLength === "mix") {
+    const lengths = resolveLengthsForBatch(
+      row.batchTotalPosts,
+      "mix",
+      row.batchId
+    );
+    // postOrder is 1-indexed. Defensive fallback to "medium" if the slot
+    // index ever lands out of range (should be impossible given the row
+    // count was generated from this exact same plan).
+    const slot = lengths[row.post.postOrder - 1];
+    perSlotLength = (slot ?? "medium") as Exclude<PostLength, "mix">;
+  } else {
+    // Stored value is short / medium / long — the union narrows naturally
+    // once "mix" is excluded.
+    perSlotLength = storedLength as Exclude<PostLength, "mix">;
+  }
+
   const result = await postGenerator.regenerateOne({
     profile,
     theme: row.batchTheme,
@@ -1037,7 +1093,7 @@ export async function regenerate(
     currentHashtags: row.post.hashtags,
     feedback,
     postOrder: row.post.postOrder,
-    postLength: (row.batchPostLength as PostLength | null) ?? "medium",
+    postLength: perSlotLength,
     postCount,
   });
   if (!result) return { ok: false, error: "ai_failed" };
