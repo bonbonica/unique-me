@@ -106,6 +106,33 @@ export function postingDaysOrFallback(batch: {
   return "every_day";
 }
 
+/**
+ * Best-effort post-count estimate for a (dayWindow, postingDays) pair, used by
+ * the Settings preview line. Returns `{ min, max }` because the day-of-week
+ * filter makes `working_days_only` / `weekends_only` start-day-dependent on a
+ * 9-day window — see spec §1 table.
+ *
+ * Walks all 7 possible starting weekdays via `resolveBatchPlan` so the answer
+ * stays consistent with whatever the live filter produces. The reference epoch
+ * is arbitrary — only its day-of-week varies as `i` sweeps 0..6.
+ */
+export function estimatePostsPerBatch(
+  dayWindow: 7 | 9,
+  postingDays: PostingDays,
+): { min: number; max: number } {
+  // 2024-01-01 is a Monday (dow=1); offsetting by 0..6 covers every starting DOW.
+  const reference = new Date(2024, 0, 1).getTime();
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (let i = 0; i < 7; i++) {
+    const start = new Date(reference + i * DAY_MS);
+    const { totalPosts } = resolveBatchPlan(start, dayWindow, postingDays);
+    if (totalPosts < min) min = totalPosts;
+    if (totalPosts > max) max = totalPosts;
+  }
+  return { min, max };
+}
+
 // ---------------------------------------------------------------------------
 // Seeded PRNG primitives — kept tiny + inline so the module has zero deps
 // and the shuffle stays deterministic per `batchId`.

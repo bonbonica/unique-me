@@ -143,7 +143,7 @@ function buildLengthSection(lengths: ConcretePostLength[]): string {
 function buildSystemPrompt(
   profile: Profile,
   lengths: ConcretePostLength[],
-  postCount: 7 | 9
+  postCount: number
 ): string {
   const base =
     "You are a social media content expert. You create engaging, authentic posts " +
@@ -356,15 +356,11 @@ export async function generate(args: {
   lengths: PostLength[];
 }): Promise<Generated | null> {
   try {
-    // TODO(onboarding-posting-preferences wave 3): broaden to any 1 <= N <= 9
-    // when generateWeeklyAction starts passing profile.postingDays. The 7-or-9
-    // narrow today is correct under the current "every_day"-hardcoded action;
-    // flipping it to a generic 1..9 range is Wave 3's job.
     const postCount = args.lengths.length;
-    if (postCount !== 7 && postCount !== 9) {
+    if (postCount < 1 || postCount > 9) {
       console.warn(
         `[post-generator] generate: unexpected lengths.length=${postCount}; ` +
-          `Wave 2 only supports 7 or 9. Returning null.`
+          `supported range is 1..9. Returning null.`
       );
       return null;
     }

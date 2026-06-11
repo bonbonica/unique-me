@@ -4,8 +4,13 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { postingDaysOrFallback } from "@/lib/scheduling/batch-calendar";
 import type { PostLength } from "@/lib/schema";
-import { postService, subscriptionService } from "@/lib/services";
+import {
+  postService,
+  profileService,
+  subscriptionService,
+} from "@/lib/services";
 import type { GenerateActionState } from "./action-types";
 
 /**
@@ -40,6 +45,18 @@ export async function generateWeeklyAction(
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {
     redirect("/login");
+  }
+
+  // Onboarding-posting-preferences wave 3: load the user's profile here so we
+  // can pass their preferred posting_days into generateWeekly below. Failing
+  // fast on no-profile mirrors the `no_profile` branch returned by the
+  // service — generating posts without a profile is impossible, so there's
+  // no behaviour change for that edge case.
+  const profile = await profileService.getProfile(session.user.id);
+  if (!profile) {
+    return {
+      error: "Your profile isn't set up yet. Finish onboarding first.",
+    };
   }
 
   const theme = String(formData.get("theme") ?? "").trim();
@@ -90,12 +107,13 @@ export async function generateWeeklyAction(
     postLength,
     postCount,
     batchOrdinalInPeriod,
-    // Onboarding-posting-preferences wave 1 defaults. Wave 3 wires
-    // profile.postingDays here. day_window mirrors postCount for now —
-    // every_day means every slot is used, so the two are equal under the
-    // current (pre-Wave-2) generation logic.
+    // Onboarding-posting-preferences wave 3: profile.postingDays is the live
+    // user preference. NULL on legacy rows reads as "every_day" via the
+    // fallback helper. `dayWindow` is the calendar span (always 7 except Pro
+    // batch 4 which gets 9); `resolveBatchPlan` inside generateWeekly filters
+    // the span by posting_days to produce the actual post count.
     dayWindow: postCount,
-    postingDays: "every_day",
+    postingDays: postingDaysOrFallback({ postingDays: profile.postingDays }),
   });
 
   if (result.ok) {

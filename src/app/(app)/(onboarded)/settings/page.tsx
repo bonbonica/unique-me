@@ -1,6 +1,8 @@
 import { headers } from "next/headers";
 import { PlanSection } from "@/components/settings/plan-section";
+import { PostingDaysSection } from "@/components/settings/posting-days-section";
 import { auth } from "@/lib/auth";
+import { postingDaysOrFallback } from "@/lib/scheduling/batch-calendar";
 import { profileService, subscriptionService } from "@/lib/services";
 
 /**
@@ -54,6 +56,20 @@ export default async function SettingsPage() {
         platformOverage={platformOverage}
         proQuota={subscription.proQuota}
       />
+
+      {profile !== null ? (
+        // The (onboarded) layout guarantees `profile` is non-null in practice;
+        // the explicit guard satisfies the narrower without an assertion and
+        // matches the same defensive pattern used for `session` above.
+        // `postingDaysOrFallback` collapses a legacy NULL row into the
+        // every-day default the spec dictates.
+        <PostingDaysSection
+          initial={postingDaysOrFallback({
+            postingDays: profile.postingDays ?? null,
+          })}
+          plan={subscription.plan}
+        />
+      ) : null}
     </div>
   );
 }
