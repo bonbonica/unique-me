@@ -87,6 +87,17 @@ Every read that returns batches the user might see, click, or count in a UI labe
 | Trial gated-screen deep-link target | `getMostRecentBatch` | `post-service.ts:428-439` | Same. |
 | `<CurrentlyPostingCta />` resolver | `getCurrentlyPostingBatch` | `post-service.ts:378-419` | Both code paths — the ordinal-keyed Pro lookup and the FIFO fallback — get the filter. |
 
+### Mutation-guard reads — also filter (added during build audit)
+
+These two guards weren't in the original inventory but the build audit caught real bypass risks: both accept `status = 'cancelled'`, which is exactly the state a tombstone sits in. A stale API client could otherwise resurrect or mutate a soft-deleted batch.
+
+| Surface | Reader | File:line | Action |
+|---|---|---|---|
+| Selection toggle ownership/lock check | `loadPostForSelectionMutation` | `post-service.ts:1184` | Add `deleted_at IS NULL`. Tombstone surfaces as `not_found` (existing variant). |
+| `reschedule` ownership/status guard | `reschedule` | `post-service.ts:1352` | Add `deleted_at IS NULL`. Tombstone surfaces as `not_found` (existing variant). |
+
+No new error variants. The other mutation guards (`scheduleMyPick`, `stopBatch`, `deleteBatchForever` pre-read) are safe-by-status — they require `reviewing` or `scheduling`, statuses a tombstone never holds — and stay unchanged.
+
 ### Read surfaces that must NOT filter
 
 | Surface | Reader | File:line | Rationale |

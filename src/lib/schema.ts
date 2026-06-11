@@ -200,6 +200,13 @@ export const weeklyBatches = pgTable(
     // rows — calendar reader treats as "every_day".
     postingDays: text("posting_days"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Quota-integrity soft-delete tombstone. NULL on live rows; a non-NULL
+    // timestamp marks the moment deleteBatchForever fired. The three quota
+    // gates (trial existence, Starter most-recent, Pro 30-day count) read
+    // tombstoned rows so a delete never refunds a slot. Every user-facing
+    // list/read in postService filters `deleted_at IS NULL` so tombstones
+    // vanish from the UI. See specs/quota-soft-delete/spec.md.
+    deletedAt: timestamp("deleted_at"),
   },
   (table) => [index("weekly_batches_user_id_idx").on(table.userId)]
 );

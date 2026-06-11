@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
 import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
@@ -16,6 +16,7 @@ import {
   type PostVariation,
   type SelectionPlatform,
   type WeeklyBatch,
+  postImages,
   postSelections,
   postVariations,
   posts,
@@ -273,7 +274,10 @@ export async function getCurrentBatch(
     .where(
       and(
         eq(weeklyBatches.userId, userId),
-        inArray(weeklyBatches.status, ["reviewing", "scheduling"])
+        inArray(weeklyBatches.status, ["reviewing", "scheduling"]),
+        // Soft-delete tombstones must not appear in any user-facing batch
+        // read (quota-soft-delete spec §4).
+        isNull(weeklyBatches.deletedAt)
       )
     )
     .orderBy(desc(weeklyBatches.createdAt))
@@ -315,7 +319,9 @@ export async function getResumableBatch(
           "scheduling",
           "scheduled",
           "cancelled",
-        ])
+        ]),
+        // Quota-soft-delete §4: tombstones never resume.
+        isNull(weeklyBatches.deletedAt)
       )
     )
     .orderBy(desc(weeklyBatches.createdAt))
@@ -393,7 +399,9 @@ export async function getCurrentlyPostingBatch(
       .where(
         and(
           eq(weeklyBatches.userId, userId),
-          eq(weeklyBatches.batchOrdinalInPeriod, periodWeek)
+          eq(weeklyBatches.batchOrdinalInPeriod, periodWeek),
+          // Quota-soft-delete §4: tombstones never surface as "currently posting".
+          isNull(weeklyBatches.deletedAt)
         )
       )
       .limit(1);
@@ -409,7 +417,9 @@ export async function getCurrentlyPostingBatch(
     .where(
       and(
         eq(weeklyBatches.userId, userId),
-        inArray(weeklyBatches.status, ["scheduling", "completed"])
+        inArray(weeklyBatches.status, ["scheduling", "completed"]),
+        // Quota-soft-delete §4: tombstones never surface as "currently posting".
+        isNull(weeklyBatches.deletedAt)
       )
     )
     .orderBy(asc(weeklyBatches.createdAt))
@@ -431,7 +441,13 @@ export async function getMostRecentBatch(
   const [batch] = await db
     .select()
     .from(weeklyBatches)
-    .where(eq(weeklyBatches.userId, userId))
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        // Quota-soft-delete §4: tombstones excluded from the deep-link target.
+        isNull(weeklyBatches.deletedAt)
+      )
+    )
     .orderBy(desc(weeklyBatches.createdAt))
     .limit(1);
 
@@ -525,7 +541,9 @@ export async function getUnscheduledBatchesForUser(
     .where(
       and(
         eq(weeklyBatches.userId, userId),
-        inArray(weeklyBatches.status, ["reviewing", "cancelled"])
+        inArray(weeklyBatches.status, ["reviewing", "cancelled"]),
+        // Quota-soft-delete §4: tombstones never appear in the /create hub.
+        isNull(weeklyBatches.deletedAt)
       )
     )
     .orderBy(desc(weeklyBatches.createdAt));
@@ -628,7 +646,9 @@ export async function getScheduledViewForUser(
         eq(weeklyBatches.userId, userId),
         // Cancelled, reviewing, in_progress all live elsewhere (cancelled +
         // reviewing on /create; in_progress is Phase-7 only).
-        inArray(weeklyBatches.status, ["scheduling", "completed"])
+        inArray(weeklyBatches.status, ["scheduling", "completed"]),
+        // Quota-soft-delete §4: tombstones never appear on /schedule.
+        isNull(weeklyBatches.deletedAt)
       )
     )
     .orderBy(desc(weeklyBatches.createdAt))
@@ -698,7 +718,14 @@ export async function getBatchForReview(
   const [batch] = await db
     .select()
     .from(weeklyBatches)
-    .where(eq(weeklyBatches.id, batchId))
+    .where(
+      and(
+        eq(weeklyBatches.id, batchId),
+        // Quota-soft-delete §4: a soft-deleted batch returns null here, the
+        // same shape callers already handle as "not found".
+        isNull(weeklyBatches.deletedAt)
+      )
+    )
     .limit(1);
 
   if (!batch || batch.userId !== sessionUserId) return null;
@@ -1184,7 +1211,15 @@ async function loadPostForSelectionMutation(
     .select({ userId: posts.userId, batchStatus: weeklyBatches.status })
     .from(posts)
     .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
-    .where(eq(posts.id, postId))
+    .where(
+      and(
+        eq(posts.id, postId),
+        // Quota-soft-delete §4 (build audit): a tombstoned batch's selections
+        // cannot be mutated. Surfaces as the existing `not_found` variant —
+        // no new error code.
+        isNull(weeklyBatches.deletedAt)
+      )
+    )
     .limit(1);
 
   if (!row) return { ok: false, error: "not_found" };
@@ -1350,7 +1385,16 @@ export async function reschedule(
       status: weeklyBatches.status,
     })
     .from(weeklyBatches)
-    .where(eq(weeklyBatches.id, batchId))
+    .where(
+      and(
+        eq(weeklyBatches.id, batchId),
+        // Quota-soft-delete §4 (build audit): a tombstone shares status
+        // 'cancelled' with a live cancelled batch, so without this clause
+        // reschedule would happily resurrect it. Surfaces as `not_found` —
+        // existing variant, no new error code.
+        isNull(weeklyBatches.deletedAt)
+      )
+    )
     .limit(1);
 
   if (!batch) return { ok: false, error: "not_found" };
@@ -1379,7 +1423,11 @@ export async function reschedule(
       .where(
         and(
           eq(weeklyBatches.id, batchId),
-          eq(weeklyBatches.status, "cancelled")
+          eq(weeklyBatches.status, "cancelled"),
+          // Belt-and-braces race guard: pre-read filtered, but a concurrent
+          // soft-delete between the pre-read and this UPDATE would otherwise
+          // resurrect a tombstone.
+          isNull(weeklyBatches.deletedAt)
         )
       )
       .returning({ id: weeklyBatches.id });
@@ -1730,34 +1778,54 @@ export type DeleteBatchForeverResult =
     };
 
 /**
- * Hard-delete a cancelled batch with image preservation (D-S2-8).
+ * Soft-delete a cancelled batch with image preservation (D-S2-8 +
+ * quota-soft-delete §3). The `weekly_batches` row stays as a tombstone with
+ * `deleted_at` set; every child row is hard-deleted; the user never sees the
+ * batch again. Quota gates in `subscription-service.ts` continue to count
+ * the tombstone, so a delete never refunds a slot — that's the whole point
+ * of this wave.
  *
- * Mirrors {@link cancelPost}'s order:
- *   1. Read batch (ownership + status gate).
- *   2. Read postIds for the batch (could be 0 if every post was cancelled
- *      individually first).
+ * Step order:
+ *   1. Read batch (ownership + status gate, including `deleted_at IS NULL` —
+ *      a re-call on an already-tombstoned batch returns `not_found` cheaply
+ *      without wasting child-row queries).
+ *   2. Read postIds (could be 0 if every post was cancelled individually
+ *      first).
  *   3. Preserve images via image-service (per-user advisory lock and the
- *      30-image cap eviction live there — this function is agnostic).
- *   4. DELETE weekly_batches row. Cascade cleans posts → post_images →
- *      post_variations → post_selections → scheduled_posts in that order, so
- *      by the time post_images rows are removed, their URLs are already owned
- *      by library_images and the blobs stay referenced.
+ *      30-image cap eviction live there).
+ *   4. Single transaction:
+ *      - Explicit bottom-up child-row DELETEs: scheduled_posts →
+ *        post_selections → post_variations → post_images → posts. Image
+ *        blobs were already moved to library_images by step 3, so the
+ *        post_images row deletion drops dead references only.
+ *      - UPDATE weekly_batches SET deleted_at = now() with the load-bearing
+ *        `deleted_at IS NULL` guard. Per spec §3, deleted_at records the
+ *        FIRST moment of deletion and is never re-stamped — a concurrent
+ *        re-call matches zero rows and surfaces the existing `not_found`
+ *        variant.
  *
- * Only `status = 'cancelled'` batches qualify here. Reviewing batches go
- * through the wizard discard flow, which has its own confirmation copy.
+ * Only `status = 'cancelled'` batches qualify. Reviewing batches go through
+ * the wizard discard flow, which has its own confirmation copy.
  */
 export async function deleteBatchForever(
   sessionUserId: string,
   batchId: string
 ): Promise<DeleteBatchForeverResult> {
-  // 1. Ownership + status gate.
+  // 1. Ownership + status gate. Tombstones return `not_found` here so we
+  // skip the children query + image-preservation round trip on re-calls.
+  // Step 4's UPDATE is still the authoritative race guard.
   const [batch] = await db
     .select({
       userId: weeklyBatches.userId,
       status: weeklyBatches.status,
     })
     .from(weeklyBatches)
-    .where(eq(weeklyBatches.id, batchId))
+    .where(
+      and(
+        eq(weeklyBatches.id, batchId),
+        isNull(weeklyBatches.deletedAt)
+      )
+    )
     .limit(1);
 
   if (!batch) return { ok: false, error: "not_found" };
@@ -1793,24 +1861,53 @@ export async function deleteBatchForever(
     }
   }
 
-  // 4. Hard-delete. The `userId = sessionUserId AND status = 'cancelled'`
-  // clause is defense in depth against a TOCTOU window between the read in
-  // step 1 and this DELETE (e.g., another tab reopened the batch).
+  // 4. Atomic child-row cleanup + tombstone write. The `deleted_at IS NULL`
+  // clause on the UPDATE is the load-bearing race guard from spec §3:
+  // concurrent re-calls match zero rows and the function surfaces the
+  // existing `not_found` variant.
   try {
-    const result = await db
-      .delete(weeklyBatches)
-      .where(
-        and(
-          eq(weeklyBatches.id, batchId),
-          eq(weeklyBatches.userId, sessionUserId),
-          eq(weeklyBatches.status, "cancelled")
-        )
-      )
-      .returning({ id: weeklyBatches.id });
+    const updated = await db.transaction(async (tx) => {
+      // Bottom-up child deletes per spec §3 — foreign keys release cleanly
+      // as we work from leaves toward the parent. inArray with an empty
+      // array is undefined behaviour in some drizzle versions, so we guard
+      // the postId-keyed deletes; deleting from `posts` by `batchId` is
+      // already a no-op when there are no rows.
+      if (postIds.length > 0) {
+        await tx
+          .delete(scheduledPosts)
+          .where(inArray(scheduledPosts.postId, postIds));
+        await tx
+          .delete(postSelections)
+          .where(inArray(postSelections.postId, postIds));
+        await tx
+          .delete(postVariations)
+          .where(inArray(postVariations.postId, postIds));
+        await tx
+          .delete(postImages)
+          .where(inArray(postImages.postId, postIds));
+        await tx.delete(posts).where(eq(posts.batchId, batchId));
+      }
 
-    if (result.length === 0) {
-      // Lost a race — batch status flipped or row vanished between our read
-      // and our DELETE. Idempotent outcome from the caller's perspective.
+      return tx
+        .update(weeklyBatches)
+        .set({ deletedAt: new Date() })
+        .where(
+          and(
+            eq(weeklyBatches.id, batchId),
+            eq(weeklyBatches.userId, sessionUserId),
+            eq(weeklyBatches.status, "cancelled"),
+            isNull(weeklyBatches.deletedAt)
+          )
+        )
+        .returning({ id: weeklyBatches.id });
+    });
+
+    if (updated.length === 0) {
+      // Lost a race — concurrent soft-delete, status flip, or the row
+      // vanished between the pre-read and the UPDATE. The transaction
+      // committed (children may have been deleted), but the parent
+      // tombstone was already written by the racing call. Idempotent from
+      // the caller's perspective.
       return { ok: false, error: "not_found" };
     }
 

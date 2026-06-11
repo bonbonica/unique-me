@@ -104,7 +104,8 @@ const SCHEMA_SQL = `
     status text NOT NULL,
     post_length text,
     posting_days text,
-    created_at timestamp NOT NULL DEFAULT now()
+    created_at timestamp NOT NULL DEFAULT now(),
+    deleted_at timestamp
   );
 `;
 

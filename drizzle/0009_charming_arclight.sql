@@ -1,0 +1,1 @@
+ALTER TABLE "weekly_batches" ADD COLUMN "deleted_at" timestamp;
