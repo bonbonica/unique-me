@@ -207,6 +207,13 @@ export const weeklyBatches = pgTable(
     // list/read in postService filters `deleted_at IS NULL` so tombstones
     // vanish from the UI. See specs/quota-soft-delete/spec.md.
     deletedAt: timestamp("deleted_at"),
+    // Image-generation Wave 1: shared visual-style directive produced by
+    // the same Anthropic caption call. Every post_images row in this batch
+    // uses the same style + a per-post imagePrompt subject so the set
+    // reads as a cohesive series. Nullable: legacy pre-Wave-1 batches have
+    // no style. Stored on the batch (not per-post) because it's shared
+    // across all images by definition. See specs/image-generation/spec.md.
+    batchImageStyle: text("batch_image_style"),
   },
   (table) => [index("weekly_batches_user_id_idx").on(table.userId)]
 );
@@ -343,12 +350,22 @@ export const postImages = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    imageUrl: text("image_url").notNull(),
+    // Nullable: an image URL only exists once `status = 'success'`. For
+    // `pending` / `generating` / `failed` rows this stays NULL. The
+    // semantic invariant `image_url IS NOT NULL iff status = 'success'`
+    // is enforced at the service layer, not the DB.
+    imageUrl: text("image_url"),
     imagePrompt: text("image_prompt").notNull(),
     attempt: integer("attempt").default(1).notNull(),
     selected: boolean("selected").default(false).notNull(),
     // Union: "ai" | "uploaded" | "library".
     source: text("source").notNull(),
+    // Union: "pending" | "generating" | "success" | "failed". Lifecycle:
+    // INSERT with "pending" → "generating" when OpenAI call starts →
+    // "success" (image_url written) or "failed" (OpenAI / Blob threw).
+    // Default "pending" so pre-Wave-1 inserts not aware of the column
+    // still produce a sensible row state.
+    status: text("status").notNull().default("pending"),
     publishedAt: timestamp("published_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },

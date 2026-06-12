@@ -71,6 +71,13 @@
       "when": 1781204096879,
       "tag": "0009_charming_arclight",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1781301844902,
+      "tag": "0010_lethal_hercules",
+      "breakpoints": true
     }
   ]
 }
