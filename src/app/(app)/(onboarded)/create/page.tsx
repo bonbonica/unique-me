@@ -4,6 +4,7 @@ import {
   CreateHubFormSlot,
   CreateHubStartNewBatchButton,
 } from "@/components/create/create-hub-form-slot";
+import type { DeleteWarning } from "@/components/create/delete-batch-forever-dialog";
 import { QuotaGatedScreen } from "@/components/create/quota-gated-screen";
 import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
 import { TrialNote } from "@/components/create/trial-note";
@@ -15,6 +16,7 @@ import {
   profileService,
   subscriptionService,
 } from "@/lib/services";
+import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
 
 /**
  * `/create` — the **Create Posts hub** (spec § 6.9, D-S2 / D-S14).
@@ -61,6 +63,11 @@ export default async function CreatePage() {
     session.user.id,
   );
   const cards = await postService.getUnscheduledBatchesForUser(session.user.id);
+  // Tier-aware copy context for `<DeleteBatchForeverDialog />` — derived
+  // once from the snapshot the page already loaded (no extra service call).
+  // Threaded through the list/card/trigger to the dialog; see
+  // specs/delete-warning/spec.md §3.
+  const deleteWarning = deriveDeleteWarning(subscription);
 
   // The three locals the final return composes. `belowSlot` is the
   // form-OR-gated-screen rendered under the cards; `canStartNew` controls
@@ -176,6 +183,7 @@ export default async function CreatePage() {
         <UnscheduledBatchList
           cards={cards}
           hasCapacity={canStartNew}
+          warning={deleteWarning}
           {...(capacityTooltip !== undefined ? { capacityTooltip } : {})}
           {...(canStartNew && cards.length > 0
             ? { startNewBatchSlot: <CreateHubStartNewBatchButton /> }
@@ -290,4 +298,58 @@ function businessTypeImportantDefault(type: string | undefined): string {
     default:
       return "e.g. the angle that makes this week worth posting about";
   }
+}
+
+// =============================================================================
+// Delete-warning derivation (specs/delete-warning/spec.md §3)
+// =============================================================================
+
+/**
+ * Pick the tier-aware copy context for `<DeleteBatchForeverDialog />` off
+ * the existing subscription snapshot. Pure synchronous transformation —
+ * no service call, no DB hit. Called once per `/create` render.
+ *
+ * The `starter` variant's `nextAvailable` is intentionally nullable. A null
+ * value means "we don't know the next-available date, so don't print one" —
+ * the dialog renders the neutral Starter copy (no date claim). We never
+ * substitute `new Date()` or any other placeholder: fabricating a date the
+ * user can hold us to would be worse than omitting it. See spec §3
+ * "Why nullable instead of a sentinel".
+ *
+ * Branch order:
+ *   1. Trial (`status === "trial"`, regardless of `plan`).
+ *   2. Active Pro with `proQuota` populated → at-cap vs under-cap split.
+ *   3. Active Starter → date may be null on the no-prior-batch path.
+ *   4. Inactive paid plans → falls through as Starter-shaped with whatever
+ *      `nextResetAt` carries (typically `null` for inactive); the dialog
+ *      renders the neutral Starter copy. No fifth variant per spec §3.
+ */
+function deriveDeleteWarning(
+  snapshot: SubscriptionStateSnapshot,
+): DeleteWarning {
+  if (snapshot.status === "trial") {
+    return { tier: "trial" };
+  }
+
+  if (snapshot.plan === "pro" && snapshot.proQuota) {
+    if (snapshot.proQuota.used >= snapshot.proQuota.max) {
+      return {
+        tier: "pro_at_cap",
+        nextAvailable: snapshot.proQuota.periodEndsAt,
+      };
+    }
+    return {
+      tier: "pro_under_cap",
+      remaining: snapshot.proQuota.max - snapshot.proQuota.used,
+    };
+  }
+
+  if (snapshot.plan === "starter" && snapshot.status === "active") {
+    return { tier: "starter", nextAvailable: snapshot.nextResetAt };
+  }
+
+  // Inactive paid plans (cancelled/expired Starter or Pro). `nextResetAt`
+  // returns null on the inactive branch — passed through so the dialog
+  // renders the neutral Starter copy without a fabricated date.
+  return { tier: "starter", nextAvailable: snapshot.nextResetAt };
 }

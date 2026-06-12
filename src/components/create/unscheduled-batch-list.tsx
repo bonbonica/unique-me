@@ -3,6 +3,7 @@ import { ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { UnscheduledBatchCard as CardData } from "@/lib/services/post-service";
 import { UnscheduledBatchCard } from "./unscheduled-batch-card";
+import type { DeleteWarning } from "./delete-batch-forever-dialog";
 
 /**
  * Server component that sits above `<GenerateForm />` / the gated screens on
@@ -38,6 +39,7 @@ type Props = {
   belowButtonsSlot?: React.ReactNode;
   hasCapacity: boolean;
   capacityTooltip?: string;
+  warning: DeleteWarning;
 };
 
 export function UnscheduledBatchList({
@@ -46,6 +48,7 @@ export function UnscheduledBatchList({
   belowButtonsSlot,
   hasCapacity,
   capacityTooltip,
+  warning,
 }: Props) {
   // Hide the whole section on fresh-state users (no cards + page didn't inject
   // a custom button). The caller is responsible for rendering the form / gate
@@ -80,7 +83,11 @@ export function UnscheduledBatchList({
       {cards.length > 0 && (
         <div className="space-y-4">
           {cards.map((card) => (
-            <UnscheduledBatchCard key={card.id} data={card} />
+            <UnscheduledBatchCard
+              key={card.id}
+              data={card}
+              warning={warning}
+            />
           ))}
         </div>
       )}

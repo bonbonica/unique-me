@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import type { UnscheduledBatchCard as Data } from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
 import { DeleteBatchForeverTrigger } from "./delete-batch-forever-trigger";
+import type { DeleteWarning } from "./delete-batch-forever-dialog";
 
-type Props = { data: Data };
+type Props = { data: Data; warning: DeleteWarning };
 
 /**
  * Presentational card for a single unscheduled batch on the Create Posts hub.
@@ -38,7 +39,7 @@ type Props = { data: Data };
  * so users can copy their own content; the rest of the card surface is
  * non-selectable per the body-wide reset in `globals.css` (D-S2-23).
  */
-export function UnscheduledBatchCard({ data }: Props) {
+export function UnscheduledBatchCard({ data, warning }: Props) {
   // Total content pieces across networks — see file docblock for the
   // rationale. Same formula used by `<ScheduledBatchBox />` so /create and
   // /schedule labels stay aligned for the same batch.
@@ -121,6 +122,7 @@ export function UnscheduledBatchCard({ data }: Props) {
               <DeleteBatchForeverTrigger
                 batchId={data.id}
                 imageCount={data.totalPosts}
+                warning={warning}
               />
             ) : (
               <Button asChild size="sm">

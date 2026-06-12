@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { DeleteBatchForeverDialog } from "./delete-batch-forever-dialog";
+import {
+  DeleteBatchForeverDialog,
+  type DeleteWarning,
+} from "./delete-batch-forever-dialog";
 
 type Props = {
   batchId: string;
   imageCount: number;
+  warning: DeleteWarning;
 };
 
 /**
@@ -31,7 +35,11 @@ type Props = {
  * primary action retains right-edge prominence per DESIGN.md §1 (single
  * primary CTA per surface) and §9.
  */
-export function DeleteBatchForeverTrigger({ batchId, imageCount }: Props) {
+export function DeleteBatchForeverTrigger({
+  batchId,
+  imageCount,
+  warning,
+}: Props) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -48,6 +56,7 @@ export function DeleteBatchForeverTrigger({ batchId, imageCount }: Props) {
       <DeleteBatchForeverDialog
         batchId={batchId}
         imageCount={imageCount}
+        warning={warning}
         open={open}
         onOpenChange={setOpen}
       />
