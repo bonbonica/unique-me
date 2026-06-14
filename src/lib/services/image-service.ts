@@ -123,6 +123,17 @@ export async function retainImagesToLibrary(
     return { ok: false, error: "not_owned" };
   }
 
+  // Image-generation Wave 1: `post_images.imageUrl` is nullable. A NULL means
+  // the image never reached `status = 'success'` (still pending / generating
+  // / failed), so there's no blob to retain. Filter these rows out before we
+  // size the eviction or insert into the library. Type predicate narrows the
+  // downstream array so `library_images.imageUrl` (NOT NULL) receives a
+  // string, not `string | null`.
+  const retainable = imageRows.filter(
+    (r): r is typeof r & { imageUrl: string } => r.imageUrl !== null,
+  );
+  if (retainable.length === 0) return { ok: true };
+
   // Collected during the txn, drained after commit so blob network calls
   // never happen inside an open transaction.
   const orphansToDelete: string[] = [];
@@ -145,7 +156,7 @@ export async function retainImagesToLibrary(
     // doesn't know that. Default to 0 defensively.
     const existingCount = countRows[0]?.count ?? 0;
 
-    const overflow = existingCount + imageRows.length - LIBRARY_CAP;
+    const overflow = existingCount + retainable.length - LIBRARY_CAP;
 
     if (overflow > 0) {
       const evictions = await tx
@@ -171,7 +182,7 @@ export async function retainImagesToLibrary(
     }
 
     await tx.insert(libraryImages).values(
-      imageRows.map((r) => ({
+      retainable.map((r) => ({
         userId: sessionUserId,
         imageUrl: r.imageUrl,
         imagePrompt: r.imagePrompt,
@@ -219,7 +230,14 @@ export async function deleteImagesPermanently(
     return { ok: false, error: "not_owned" };
   }
 
-  for (const row of imageRows) await safeDeleteBlob(row.imageUrl);
+  // Image-generation Wave 1: skip rows whose `imageUrl` is NULL — those
+  // never reached `status = 'success'`, so there's no blob to delete. The
+  // `post_images` row will still be cascade-removed when the caller deletes
+  // the parent post; this loop only handles the blob side.
+  for (const row of imageRows) {
+    if (row.imageUrl === null) continue;
+    await safeDeleteBlob(row.imageUrl);
+  }
   return { ok: true };
 }
 

@@ -67,6 +67,12 @@ importers:
       next-themes:
         specifier: ^0.4.6
         version: 0.4.6(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      openai:
+        specifier: ^6.42.0
+        version: 6.42.0(zod@4.4.3)
+      p-limit:
+        specifier: ^7.3.0
+        version: 7.3.0
       pg:
         specifier: ^8.20.0
         version: 8.21.0
@@ -4300,6 +4306,17 @@ packages:
     resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
     engines: {node: '>=20'}
 
+  openai@6.42.0:
+    resolution: {integrity: sha512-1WFEt/uXMXOLhYRNkgJWo08Y2YNvNwpVU72K7ibrWgWpNOXd4VojXLbe6SQ4bLiUQ3Y8jz4IiyVkylJCL1DtZg==}
+    peerDependencies:
+      ws: ^8.18.0
+      zod: ^3.25 || ^4.0
+    peerDependenciesMeta:
+      ws:
+        optional: true
+      zod:
+        optional: true
+
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
@@ -4318,6 +4335,10 @@ packages:
   p-limit@3.1.0:
     resolution: {integrity: sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ==}
     engines: {node: '>=10'}
+
+  p-limit@7.3.0:
+    resolution: {integrity: sha512-7cIXg/Z0M5WZRblrsOla88S4wAK+zOQQWeBYfV3qJuJXMr+LnbYjaadrFaS0JILfEDPVqHyKnZ1Z/1d6J9VVUw==}
+    engines: {node: '>=20'}
 
   p-locate@5.0.0:
     resolution: {integrity: sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw==}
@@ -5276,6 +5297,10 @@ packages:
   yocto-queue@0.1.0:
     resolution: {integrity: sha512-rVksvsnNCdJ/ohGc6xgPwyN8eheCxsiLM8mxuE/t/mOVqJewPuO1miLpTHQiRgTKCLexL4MeAFVagts7HmNZ2Q==}
     engines: {node: '>=10'}
+
+  yocto-queue@1.2.2:
+    resolution: {integrity: sha512-4LCcse/U2MHZ63HAJVE+v71o7yOdIe4cZ70Wpf8D/IyjDKYQLV5GD46B+hSTjJsvV5PztjvHoU580EftxjDZFQ==}
+    engines: {node: '>=12.20'}
 
   yocto-spinner@1.2.0:
     resolution: {integrity: sha512-Yw0hUB6UA3o4YUgKy3oSe9a4cxoaZ9sBfYDw+JSxo6Id0KoJGoxzPA24qqUXYKBWABs/zDSGTz9kww7t3F0XGw==}
@@ -9233,6 +9258,10 @@ snapshots:
       powershell-utils: 0.1.0
       wsl-utils: 0.3.1
 
+  openai@6.42.0(zod@4.4.3):
+    optionalDependencies:
+      zod: 4.4.3
+
   optionator@0.9.4:
     dependencies:
       deep-is: 0.1.4
@@ -9265,6 +9294,10 @@ snapshots:
   p-limit@3.1.0:
     dependencies:
       yocto-queue: 0.1.0
+
+  p-limit@7.3.0:
+    dependencies:
+      yocto-queue: 1.2.2
 
   p-locate@5.0.0:
     dependencies:
@@ -10306,6 +10339,8 @@ snapshots:
       yargs-parser: 21.1.1
 
   yocto-queue@0.1.0: {}
+
+  yocto-queue@1.2.2: {}
 
   yocto-spinner@1.2.0:
     dependencies:
