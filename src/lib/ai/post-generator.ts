@@ -30,7 +30,10 @@ import type Anthropic from "@anthropic-ai/sdk";
  *    ephemeral cache, saving ~90% on those tokens.
  */
 
-const MAX_OUTPUT_TOKENS = 8000;
+// Bumped from 8000 → 9500 in Wave 1 of image generation to leave headroom
+// for the per-post imagePrompt (~50-150 tokens each) and the one shared
+// batchImageStyle (~100 tokens) the model now also emits in the same call.
+const MAX_OUTPUT_TOKENS = 9500;
 const TOOL_NAME = "save_weekly_posts";
 const REGEN_TOOL_NAME = "regenerate_one_post";
 
@@ -214,7 +217,23 @@ function buildSystemPrompt(
     "- Canonical (Facebook): 3-8 hashtags.\n" +
     "- Instagram variation: 8-30 hashtags, mix of broad reach + niche.\n" +
     "- LinkedIn variation: 3-6 hashtags, professional and topical.\n" +
-    "- Never invent generic hashtags like #SmallBusiness #Tips unless they fit naturally.\n";
+    "- Never invent generic hashtags like #SmallBusiness #Tips unless they fit naturally.\n\n" +
+    "IMAGE PROMPTS:\n" +
+    "For each post, also produce a short imagePrompt: a 1-2 sentence\n" +
+    "description of a single still image that would complement the caption.\n" +
+    "Focus on the SUBJECT — what's in the frame, what action, what setting.\n" +
+    "Do NOT include style, lighting, mood, or color choices in the per-post\n" +
+    "imagePrompt; those belong in the batchImageStyle.\n\n" +
+    `Also produce ONE batchImageStyle that applies to the whole set of ${postCount}\n` +
+    "images. This describes the consistent visual treatment across all\n" +
+    "images: lighting (soft natural / dim warm / overcast), composition\n" +
+    "(close-up / wide / overhead), color palette, mood, and medium\n" +
+    "(photography / illustration / hand-drawn). Derive it from the brand's\n" +
+    "existing brand voice and tone so the images feel like the brand. The\n" +
+    "same batchImageStyle MUST apply to every image in the set — the goal\n" +
+    "is a cohesive set, like one photographer shot them all.\n\n" +
+    "Keep both fields safe-for-work and free of copyrighted likenesses,\n" +
+    "logos, or trademarks.\n";
 
   return base + analysisBlock + rules;
 }
@@ -294,6 +313,12 @@ const variationSchema = z.object({
 // `generate` (the actual revalidation schema rebuilds the postOrder bound);
 // the module-level version below keeps the loose `min(1)` so the exported
 // `Generated` type stays stable across both 7- and 9-post batches.
+//
+// `imagePrompt` (Wave 1): per-post SUBJECT directive — what's in the frame.
+// Style/lighting/mood/medium live on the batch-level `batchImageStyle` below
+// so they stay identical across all N images. Bounds align with the tool
+// schema (`minLength: 30 / maxLength: 580`) and respect OpenAI's
+// ~1000-char combined-prompt cap (see § R7 in the spec).
 const postObjectSchema = z.object({
   postOrder: z.number().int().min(1),
   postText: z.string().min(20).max(2200),
@@ -302,12 +327,18 @@ const postObjectSchema = z.object({
     instagram: variationSchema.optional(),
     linkedin: variationSchema.optional(),
   }),
+  imagePrompt: z.string().min(30).max(580),
 });
 
 // Shape only — the `.length(args.postCount)` constraint is applied inside
 // `generate`. Defined here so `Generated` is a single source of truth.
+//
+// `batchImageStyle` (Wave 1): one shared visual-style directive for the
+// whole batch. The server prefixes it onto every per-post imagePrompt
+// before the OpenAI call so the set reads as one cohesive series.
 const generatedShape = z.object({
   posts: z.array(postObjectSchema),
+  batchImageStyle: z.string().min(30).max(400),
 });
 
 const regeneratedOneSchema = z.object({
@@ -444,12 +475,39 @@ export async function generate(args: {
                   },
                   required: [],
                 },
+                // Image-generation Wave 1: a per-post SUBJECT description for
+                // the image-generation call. The shared batchImageStyle below
+                // carries lighting / palette / mood / medium. Max 580 chars so
+                // the combined `batchImageStyle (max 400) + " " + imagePrompt
+                // (max 580)` stays under OpenAI's ~1000-char image-prompt cap.
+                imagePrompt: {
+                  type: "string",
+                  minLength: 30,
+                  maxLength: 580,
+                },
               },
-              required: ["postOrder", "postText", "hashtags", "variations"],
+              required: [
+                "postOrder",
+                "postText",
+                "hashtags",
+                "variations",
+                "imagePrompt",
+              ],
             },
           },
+          // Image-generation Wave 1: ONE shared visual-style directive that
+          // applies to every image in the batch — lighting, composition,
+          // palette, mood, medium. Derived from the brand's voice/tone so
+          // images feel like the brand. The model produces it once; the
+          // server prefixes it onto every per-post imagePrompt before sending
+          // to OpenAI, so the whole set reads as one cohesive series.
+          batchImageStyle: {
+            type: "string",
+            minLength: 30,
+            maxLength: 400,
+          },
         },
-        required: ["posts"],
+        required: ["posts", "batchImageStyle"],
       },
     };
 
@@ -457,6 +515,11 @@ export async function generate(args: {
     // `Generated` type is derived from `generatedShape` at module scope
     // (loose, no length constraint); applying `.length()` here narrows the
     // runtime check without changing the static shape callers see.
+    //
+    // `imagePrompt` inherits from `postObjectSchema` via `.extend()` (which
+    // narrows only `postOrder`); `batchImageStyle` is added at the top level
+    // and mirrors the tool-schema bounds (min 30, max 400) — same source of
+    // truth as the module-level `generatedShape`.
     const generatedSchema = z.object({
       posts: z
         .array(
@@ -465,6 +528,7 @@ export async function generate(args: {
           })
         )
         .length(postCount),
+      batchImageStyle: z.string().min(30).max(400),
     });
 
     const response = await anthropic.messages.create({
@@ -482,7 +546,8 @@ export async function generate(args: {
             `- The important thing to highlight: ${args.importantThing}\n\n` +
             `Generate exactly ${postCount} posts (postOrder 1 through ${postCount}). For each post ` +
             "include an Instagram variation and a LinkedIn variation per the " +
-            "rules in the system prompt.",
+            "rules in the system prompt. Also produce one batchImageStyle " +
+            "(shared across all images) and an imagePrompt per post.",
         },
       ],
     });

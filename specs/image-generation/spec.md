@@ -126,21 +126,20 @@ import { openai, OPENAI_IMAGE_MODEL } from "@/lib/ai/openai";
  */
 export async function generateImage(args: {
   combinedPrompt: string;       // batchImageStyle + " " + post.imagePrompt
-  size?: "1024x1024" | "1024x1792" | "1792x1024";  // default 1024x1024
+  size?: "1024x1024" | "1536x1024" | "1024x1536";  // default 1024x1024
 }): Promise<{ imageBuffer: Buffer; mimeType: string } | null> {
   try {
     const response = await openai.images.generate({
       model: OPENAI_IMAGE_MODEL,
       prompt: args.combinedPrompt,
       size: args.size ?? "1024x1024",
-      response_format: "b64_json",  // simplifies handoff to Vercel Blob
       n: 1,
     });
     const b64 = response.data?.[0]?.b64_json;
     if (!b64) return null;
     return {
       imageBuffer: Buffer.from(b64, "base64"),
-      mimeType: "image/png",  // gpt-image-1 returns PNG
+      mimeType: "image/png",  // GPT image models default to PNG
     };
   } catch (err) {
     console.error("[image-generator] generateImage threw", err);
@@ -148,6 +147,10 @@ export async function generateImage(args: {
   }
 }
 ```
+
+**Stage 2 reconciliation notes** (folded back into this spec after verifying the installed `openai@6.42.0` types at `node_modules/openai/resources/images.d.ts`):
+- **Size enum:** GPT image models (gpt-image-1.5 included) accept `1024x1024 | 1536x1024 | 1024x1536`. The DALL-E-3 sizes (`1792x1024 / 1024x1792`) the spec originally listed are NOT supported by `gpt-image-1.5` and would 400 the request.
+- **No `response_format`:** the SDK's `ImageGenerateParams.response_format` is documented as `dall-e-2 / dall-e-3` only — *"This parameter isn't supported for the GPT image models, which always return base64-encoded images."* The shipped `image-generator.ts` omits it accordingly.
 
 Public contract: never throws, returns `null` on failure. Matches the never-throws contract `post-generator.ts:13-14` documents and that `generateWeekly` already relies on.
 
