@@ -37,6 +37,32 @@ const MAX_OUTPUT_TOKENS = 9500;
 const TOOL_NAME = "save_weekly_posts";
 const REGEN_TOOL_NAME = "regenerate_one_post";
 
+/**
+ * Image-generation Wave 1 safety net. Truncate a model-returned string to
+ * `max` characters without throwing. Used as a Zod `.transform()` on the
+ * `batchImageStyle` and per-post `imagePrompt` fields so an over-length
+ * response NEVER surfaces as `ai_failed` — Zod silently trims and the
+ * generation continues.
+ *
+ * Tries to end on a word boundary by looking back up to ~60 chars from
+ * `max` for the last space; if none, hard-cuts at `max`. The Anthropic
+ * tool schema's own `maxLength` still tells the model to aim for `max`;
+ * this helper is the safety net for the times the model exceeds it.
+ *
+ * Post-trim invariant relied on by the image-generation caller:
+ *   batchImageStyle (≤ 600) + " " (1) + imagePrompt (≤ 380) ≤ 981
+ * which stays comfortably under OpenAI's ~1000-char image-prompt cap.
+ */
+function trimToMax(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const lookbackStart = Math.max(0, max - 60);
+  const lastSpace = s.lastIndexOf(" ", max);
+  if (lastSpace >= lookbackStart) {
+    return s.slice(0, lastSpace);
+  }
+  return s.slice(0, max);
+}
+
 // =============================================================================
 // System prompt
 // =============================================================================
@@ -316,9 +342,11 @@ const variationSchema = z.object({
 //
 // `imagePrompt` (Wave 1): per-post SUBJECT directive — what's in the frame.
 // Style/lighting/mood/medium live on the batch-level `batchImageStyle` below
-// so they stay identical across all N images. Bounds align with the tool
-// schema (`minLength: 30 / maxLength: 580`) and respect OpenAI's
-// ~1000-char combined-prompt cap (see § R7 in the spec).
+// so they stay identical across all N images. The tool schema asks the
+// model for `maxLength: 380`; this Zod layer accepts ANY string the model
+// returns and silently trims to 380 via `trimToMax`. A too-long value can
+// NEVER surface as `ai_failed` — overlap with the OpenAI combined-prompt
+// cap is guaranteed by trimming, not by rejecting.
 const postObjectSchema = z.object({
   postOrder: z.number().int().min(1),
   postText: z.string().min(20).max(2200),
@@ -327,7 +355,7 @@ const postObjectSchema = z.object({
     instagram: variationSchema.optional(),
     linkedin: variationSchema.optional(),
   }),
-  imagePrompt: z.string().min(30).max(580),
+  imagePrompt: z.string().transform((s) => trimToMax(s, 380)),
 });
 
 // Shape only — the `.length(args.postCount)` constraint is applied inside
@@ -335,10 +363,13 @@ const postObjectSchema = z.object({
 //
 // `batchImageStyle` (Wave 1): one shared visual-style directive for the
 // whole batch. The server prefixes it onto every per-post imagePrompt
-// before the OpenAI call so the set reads as one cohesive series.
+// before the OpenAI call so the set reads as one cohesive series. Same
+// trim-don't-reject rule as `imagePrompt` above — Zod accepts any string
+// and trims to 600 via `trimToMax`. Combined cap (600 + 1 + 380 = 981)
+// stays under OpenAI's ~1000-char image-prompt limit (see spec § R7).
 const generatedShape = z.object({
   posts: z.array(postObjectSchema),
-  batchImageStyle: z.string().min(30).max(400),
+  batchImageStyle: z.string().transform((s) => trimToMax(s, 600)),
 });
 
 const regeneratedOneSchema = z.object({
@@ -477,13 +508,15 @@ export async function generate(args: {
                 },
                 // Image-generation Wave 1: a per-post SUBJECT description for
                 // the image-generation call. The shared batchImageStyle below
-                // carries lighting / palette / mood / medium. Max 580 chars so
-                // the combined `batchImageStyle (max 400) + " " + imagePrompt
-                // (max 580)` stays under OpenAI's ~1000-char image-prompt cap.
+                // carries lighting / palette / mood / medium. Max 380 chars so
+                // the combined `batchImageStyle (max 600) + " " + imagePrompt
+                // (max 380)` = 981, safely under OpenAI's ~1000-char image-
+                // prompt cap. Re-balanced from 580/400 in Stage 4 after live
+                // runs showed the model writes richer styles than 400 allows.
                 imagePrompt: {
                   type: "string",
                   minLength: 30,
-                  maxLength: 580,
+                  maxLength: 380,
                 },
               },
               required: [
@@ -504,7 +537,7 @@ export async function generate(args: {
           batchImageStyle: {
             type: "string",
             minLength: 30,
-            maxLength: 400,
+            maxLength: 600,
           },
         },
         required: ["posts", "batchImageStyle"],
@@ -516,10 +549,12 @@ export async function generate(args: {
     // (loose, no length constraint); applying `.length()` here narrows the
     // runtime check without changing the static shape callers see.
     //
-    // `imagePrompt` inherits from `postObjectSchema` via `.extend()` (which
-    // narrows only `postOrder`); `batchImageStyle` is added at the top level
-    // and mirrors the tool-schema bounds (min 30, max 400) — same source of
-    // truth as the module-level `generatedShape`.
+    // `imagePrompt` inherits the trim-not-reject transform from
+    // `postObjectSchema` via `.extend()` (which narrows only `postOrder`);
+    // `batchImageStyle` is added at the top level with the same trim
+    // safety net as the module-level `generatedShape`. Either field can
+    // exceed its tool-schema `maxLength` and the generation still ships
+    // — Zod silently trims rather than throwing.
     const generatedSchema = z.object({
       posts: z
         .array(
@@ -528,7 +563,7 @@ export async function generate(args: {
           })
         )
         .length(postCount),
-      batchImageStyle: z.string().min(30).max(400),
+      batchImageStyle: z.string().transform((s) => trimToMax(s, 600)),
     });
 
     const response = await anthropic.messages.create({

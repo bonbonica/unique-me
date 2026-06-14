@@ -2,6 +2,8 @@ import "server-only";
 
 import { del } from "@vercel/blob";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import pLimit from "p-limit";
+import { generateImage } from "@/lib/ai/image-generator";
 import { db } from "@/lib/db";
 import {
   type LibraryImage,
@@ -10,6 +12,7 @@ import {
   postLogs,
   posts,
 } from "@/lib/schema";
+import { upload } from "@/lib/storage";
 
 /**
  * Stage-2 D-S2-9. The single orchestrator for the Vercel Blob lifecycle. Every
@@ -295,4 +298,129 @@ export async function deleteLibraryImage(
     );
 
   return { ok: true };
+}
+
+// ============================================================================
+// Image-generation Wave 1 — runImageGenerationForBatch
+// ============================================================================
+
+/**
+ * Cap on simultaneous OpenAI image-generation calls per batch run. Three is
+ * a conservative starting point chosen to stay well under typical per-minute
+ * rate limits for `gpt-image-1.5`. Tune downward (to 2 or 1) if production
+ * logs show 429s; tune upward only after rate-limit headroom is verified.
+ */
+const IMAGE_CONCURRENCY = 3;
+
+/**
+ * Image-generation Wave 1 fan-out. Called from `postService.generateWeekly`
+ * via `after()` from `next/server` AFTER the text-batch transaction has
+ * committed — the response has already returned to the user. This function
+ * drives the 7-9 OpenAI calls in parallel (bounded by `IMAGE_CONCURRENCY`)
+ * and backfills each `post_images` row from `status="pending"` to either
+ * `"success"` (with `imageUrl` set to the Vercel Blob URL) or `"failed"`.
+ *
+ * Contract:
+ *  - **Never throws.** Top-level try/catch + per-row try/catch ensure that
+ *    any exception is logged and converted to a `status="failed"` write.
+ *    Throwing here would either crash the request handler (if not deferred)
+ *    or be silently swallowed by `after()` (if it is) — neither is useful.
+ *  - **Partial failure is fine.** One image failing flips that row to
+ *    `failed`; the other 6-8 rows are unaffected. The batch is NEVER marked
+ *    failed by an image error — `weekly_batches.status` stays whatever the
+ *    text path set it to (`"reviewing"`).
+ *  - **No auto-retry.** A `failed` row stays `failed` until Wave 2's manual
+ *    retry control runs.
+ *
+ * Read shape: `post_images` has no direct `batchId`, so we inner-join `posts`
+ * (which has `batchId`) to filter the pending rows for this batch.
+ */
+export async function runImageGenerationForBatch(
+  batchId: string,
+): Promise<void> {
+  try {
+    const pending = await db
+      .select({
+        id: postImages.id,
+        imagePrompt: postImages.imagePrompt,
+      })
+      .from(postImages)
+      .innerJoin(posts, eq(postImages.postId, posts.id))
+      .where(
+        and(eq(posts.batchId, batchId), eq(postImages.status, "pending")),
+      );
+
+    if (pending.length === 0) return;
+
+    const limit = pLimit(IMAGE_CONCURRENCY);
+
+    await Promise.allSettled(
+      pending.map((row) =>
+        limit(async () => {
+          try {
+            await db
+              .update(postImages)
+              .set({ status: "generating" })
+              .where(eq(postImages.id, row.id));
+
+            const result = await generateImage({
+              combinedPrompt: row.imagePrompt,
+            });
+
+            if (!result) {
+              await db
+                .update(postImages)
+                .set({ status: "failed" })
+                .where(eq(postImages.id, row.id));
+              return;
+            }
+
+            // Upload to Vercel Blob under `post-images/{batchId}/`. The row
+            // id is the filename so collisions are impossible. Allow up to
+            // 10MB per image — well above typical `gpt-image-1.5` PNG sizes
+            // (usually 1-3MB at 1024x1024) but capped so a runaway response
+            // can't drain Blob storage.
+            const stored = await upload(
+              result.imageBuffer,
+              `${row.id}.png`,
+              `post-images/${batchId}`,
+              { maxSize: 10 * 1024 * 1024 },
+            );
+
+            await db
+              .update(postImages)
+              .set({ status: "success", imageUrl: stored.url })
+              .where(eq(postImages.id, row.id));
+          } catch (err) {
+            // `generateImage` is never-throws by contract, but `upload` and
+            // the `db.update` calls CAN throw (file-validation error, Blob
+            // 5xx, DB connection drop). Catch here so the row doesn't get
+            // stuck in `"generating"` and so `Promise.allSettled` sees a
+            // clean resolution.
+            console.error(
+              "[image-service] runImageGenerationForBatch row failed",
+              { rowId: row.id, err },
+            );
+            await db
+              .update(postImages)
+              .set({ status: "failed" })
+              .where(eq(postImages.id, row.id))
+              .catch((dbErr) => {
+                console.error(
+                  "[image-service] could not mark row failed after error",
+                  { rowId: row.id, dbErr },
+                );
+              });
+          }
+        }),
+      ),
+    );
+  } catch (err) {
+    // If reading the pending rows fails entirely we can't do anything —
+    // rows remain `pending`. Wave 2's retry control will recover them.
+    console.error(
+      "[image-service] runImageGenerationForBatch top-level failed",
+      { batchId, err },
+    );
+  }
 }

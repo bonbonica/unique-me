@@ -168,30 +168,30 @@ This is the most delicate change. The captions are tuned and quality is good —
      "imagePrompt": {
        "type": "string",
        "minLength": 30,
-       "maxLength": 580
+       "maxLength": 380
      }
      ```
-     (Cap is 580 — combined with `batchImageStyle.max(400)` + 1 space joiner = 981 chars, safely under OpenAI's ~1000-char image-prompt limit. See R7.)
+     (Cap is 380 — combined with `batchImageStyle.max(600)` + 1 space joiner = 981 chars, safely under OpenAI's ~1000-char image-prompt limit. Re-balanced from 580/400 in Stage 4 after live runs showed the model writes richer styles than 400 allows. See R7.)
    - Add `"imagePrompt"` to the `items.required` array (currently `["postOrder", "postText", "hashtags", "variations"]`).
    - Add a sibling top-level property next to `posts`:
      ```json
      "batchImageStyle": {
        "type": "string",
        "minLength": 30,
-       "maxLength": 400
+       "maxLength": 600
      }
      ```
    - Add `"batchImageStyle"` to the top-level `required` array (currently `["posts"]`).
 
 2. **Module-level Zod (`post-generator.ts:297-311`)** — extend `postObjectSchema` with:
    ```ts
-   imagePrompt: z.string().min(30).max(580),
+   imagePrompt: z.string().min(30).max(380),
    ```
    And extend `generatedShape`:
    ```ts
    const generatedShape = z.object({
      posts: z.array(postObjectSchema),
-     batchImageStyle: z.string().min(30).max(400),
+     batchImageStyle: z.string().min(30).max(600),
    });
    ```
    The `Generated` type at line 326 picks up both new fields automatically.
@@ -204,7 +204,7 @@ This is the most delicate change. The captions are tuned and quality is good —
          postOrder: z.number().int().min(1).max(postCount),
        })
      ).length(postCount),
-     batchImageStyle: z.string().min(30).max(400),
+     batchImageStyle: z.string().min(30).max(600),
    });
    ```
 
@@ -430,7 +430,7 @@ A Wave 1 batch is correctly delivered if **all** of the following hold:
 | R4 | **OpenAI rate limits at the project's tier.** | Unknown without checking the OpenAI dashboard. Concurrency cap of 3 is a conservative starting point. Watch logs in production; tune downward if 429s appear. |
 | R5 | **`p-limit` is ESM-only in recent versions.** | The project is ESM (`"type": "module"` or Next.js's default transpilation handles it). Confirm `await import("p-limit")` works in the build context. |
 | R6 | **Stale `pending` rows if the after-job crashes mid-flight.** | Wave 1 accepts this. Wave 2's retry button gives users a manual recovery path. A sweep cron is future work. |
-| R7 | ~~Combined-prompt length may exceed OpenAI's prompt limit (~1000 chars for some image endpoints).~~ | **Resolved in spec.** `batchImageStyle` ≤ 400 + `imagePrompt` ≤ 580 + 1 space joiner = **981** chars, safely under OpenAI's ~1000-char limit. Caps enforced in both the Anthropic tool schema and the Zod re-validation (see § Caption-call schema extension). |
+| R7 | ~~Combined-prompt length may exceed OpenAI's prompt limit (~1000 chars for some image endpoints).~~ | **Resolved in spec (rebalanced Stage 4).** `batchImageStyle` ≤ **600** + `imagePrompt` ≤ **380** + 1 space joiner = **981** chars, safely under OpenAI's ~1000-char limit. Caps were rebalanced from the original 400/580 split after Stage 4 live runs showed the model writes richer styles than 400 allowed — Zod rejection on `batchImageStyle` was surfacing as a generic `ai_failed` to the user. The combined ceiling is unchanged (981); only the per-field allocation moved. Caps enforced in both the Anthropic tool schema and the Zod re-validation (see § Caption-call schema extension). |
 | R8 | **Polling cost.** | At 2.5s cadence × ~60s of generation × 7-9 rows in the response, this is a non-trivial number of round-trips. Acceptable for Wave 1; if it becomes a problem, push (SSE) is the future answer. |
 
 ---

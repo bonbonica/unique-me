@@ -1,5 +1,6 @@
 import "server-only";
 
+import { after } from "next/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
@@ -908,6 +909,12 @@ export async function generateWeekly(
         status: "reviewing",
         dayWindow: input.dayWindow,
         postingDays: input.postingDays,
+        // Image-generation Wave 1: the shared visual-style directive the
+        // caption call also produced. Stored on the batch (not per-post)
+        // because it's identical for every image in the set, and Wave 2's
+        // retry can re-use it when re-generating a single failed image so
+        // the replacement stays consistent with the surviving siblings.
+        batchImageStyle: generated.batchImageStyle,
       });
 
       const postRows = generated.posts.map((p) => ({
@@ -954,7 +961,43 @@ export async function generateWeekly(
         await tx.insert(postVariations).values(variationRows);
       }
 
+      // Image-generation Wave 1: pre-insert one `post_images` row per post
+      // with `status="pending"`. The image-job runs AFTER this txn commits
+      // (see the `after()` call below) and flips each row to either
+      // `"success"` (with `imageUrl` set) or `"failed"`. Pre-inserting at
+      // this point means the UI sees N placeholder rows the instant the
+      // action returns — no race between user-arrives-at-review and
+      // rows-don't-exist-yet. `imageUrl` is null until success (Stage 1
+      // made the column nullable to support exactly this state).
+      const imageRows = generated.posts.map((aiPost, i) => ({
+        id: crypto.randomUUID(),
+        postId: postRows[i]!.id,
+        userId,
+        imageUrl: null,
+        imagePrompt:
+          generated.batchImageStyle + " " + aiPost.imagePrompt,
+        attempt: 1,
+        source: "ai",
+        selected: true,
+        status: "pending" as const,
+      }));
+      await tx.insert(postImages).values(imageRows);
+
       return { batchId, variationsCreated: variationRows.length };
+    });
+
+    // Image-generation Wave 1: kick off the image fan-out AFTER the text
+    // transaction has committed. `after()` from `next/server` defers the
+    // callback until the response has been sent, so the user's HTTP
+    // response unblocks immediately on text-commit (verified working in
+    // Stage 0 — `markerAt - returnedAt` was +3-9ms across runs).
+    //
+    // `runImageGenerationForBatch` is never-throws by contract; we do NOT
+    // need to wrap this call. A failure inside it logs to console and
+    // leaves affected rows as `failed` or `pending`, which Wave 2's retry
+    // control can recover.
+    after(() => {
+      imageService.runImageGenerationForBatch(result.batchId);
     });
 
     return {
