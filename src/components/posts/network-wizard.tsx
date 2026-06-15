@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { Check } from "lucide-react";
 import {
   deselectForNetworkAction,
+  getBatchImageStatusesAction,
   selectForNetworkAction,
 } from "@/app/(app)/(onboarded)/posts/actions";
 import { WizardNav } from "@/components/posts/wizard-nav";
@@ -14,7 +15,27 @@ import {
   postingDaysOrFallback,
 } from "@/lib/scheduling/batch-calendar";
 import type { SelectionPlatform } from "@/lib/schema";
-import type { BatchForReview } from "@/lib/services/post-service";
+import type {
+  BatchForReview,
+  PostImageStatus,
+} from "@/lib/services/post-service";
+
+/**
+ * Image-generation Wave 1 Stage 5: polling cadence for the per-post image
+ * status. 2.5s strikes the balance between "user sees the tile fill in
+ * within ~one breath of it finishing" and "we don't hammer the DB while
+ * the user sits on the page". Generation typically lands in 10-60s for a
+ * 7-post batch (one OpenAI image takes 3-15s; p-limit=3 means 3 waves
+ * worst-case), so a handful of polls cover the whole window.
+ */
+const IMAGE_POLL_INTERVAL_MS = 2500;
+
+function anyPending(images: Record<string, PostImageStatus>): boolean {
+  for (const img of Object.values(images)) {
+    if (img.status === "pending" || img.status === "generating") return true;
+  }
+  return false;
+}
 
 /**
  * `/posts` wizard orchestrator. Steps are derived from the user's
@@ -99,6 +120,57 @@ export function NetworkWizard({
     initialSelections(data)
   );
   const [, startTransition] = useTransition();
+
+  // Image-generation Wave 1 Stage 5: per-post image status. SSR loads the
+  // initial map via `getBatchForReview`; client polling keeps it fresh as
+  // pending rows finish. The ref carries the latest value into the interval
+  // callback so we don't have to rebind the effect on every state change —
+  // synced from state via a no-deps effect (writing the ref during render
+  // would trigger React's "Cannot access refs during render" warning).
+  const [images, setImages] = useState<Record<string, PostImageStatus>>(
+    () => data.images,
+  );
+  const imagesRef = useRef(images);
+  useEffect(() => {
+    imagesRef.current = images;
+  });
+
+  useEffect(() => {
+    // Skip the poll entirely if every row is already terminal (page was
+    // opened after all images had landed).
+    if (!anyPending(data.images)) return;
+
+    let cancelled = false;
+
+    const tick = async () => {
+      // Always re-check via the ref so we observe the latest state, not
+      // the value captured when this interval started. Once all rows
+      // terminate, clear the interval so we stop hitting the server.
+      if (!anyPending(imagesRef.current)) {
+        clearInterval(intervalId);
+        return;
+      }
+      try {
+        const fresh = await getBatchImageStatusesAction(data.batch.id);
+        if (cancelled) return;
+        setImages((prev) => ({ ...prev, ...fresh }));
+      } catch (err) {
+        // Transient network errors shouldn't kill the loop — the next
+        // tick will try again. The 2.5s cadence caps the churn.
+        console.error("[network-wizard] image-status poll failed", err);
+      }
+    };
+
+    const intervalId = setInterval(tick, IMAGE_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+    // We deliberately depend ONLY on batch.id (the URL the polling is
+    // tied to) so the interval isn't torn down on every state update.
+    // The tick reads the latest `images` via `imagesRef`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.batch.id]);
 
   // Defensive: the parent page redirects to /onboarding when platforms is
   // empty, so this case shouldn't render here. Belt-and-braces.
@@ -219,6 +291,7 @@ export function NetworkWizard({
           onSelectAllForPlatform={selectAllForPlatform}
           onDeselectAllForPlatform={deselectAllForPlatform}
           mode={mode}
+          images={images}
         />
       ) : (
         <WizardSummary
@@ -228,6 +301,7 @@ export function NetworkWizard({
           selections={selections}
           onSetSelection={setSelection}
           mode={mode}
+          images={images}
         />
       )}
 

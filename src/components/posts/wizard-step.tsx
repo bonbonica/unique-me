@@ -11,11 +11,15 @@ import {
   type PostWithExtras,
   textFor,
 } from "@/components/posts/network-preview";
+import { PostTileImage } from "@/components/posts/post-tile-image";
 import { RegenerateDialog } from "@/components/posts/regenerate-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { PostingDays, SelectionPlatform } from "@/lib/schema";
-import type { BatchForReview } from "@/lib/services/post-service";
+import type {
+  BatchForReview,
+  PostImageStatus,
+} from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
 
 /**
@@ -78,6 +82,7 @@ export function WizardStep({
   onSelectAllForPlatform,
   onDeselectAllForPlatform,
   mode,
+  images,
 }: {
   platform: SelectionPlatform;
   posts: BatchForReview["posts"];
@@ -94,6 +99,12 @@ export function WizardStep({
   onSelectAllForPlatform: (platform: SelectionPlatform) => void;
   onDeselectAllForPlatform: (platform: SelectionPlatform) => void;
   mode: "reviewing" | "cancelled";
+  /**
+   * Image-generation Wave 1 Stage 5: per-post image status map (keyed by
+   * `post.id`). Driven by `<NetworkWizard />`'s polling — updates as
+   * pending tiles flip to success/failed. Passed through to PostCard.
+   */
+  images: Record<string, PostImageStatus>;
 }) {
   const selectedIds = selections[platform];
   const selectedCount = selectedIds.length;
@@ -195,6 +206,7 @@ export function WizardStep({
             isSelected={selectedIds.includes(post.id)}
             onToggle={(next) => onSetSelection(post.id, platform, next)}
             mode={mode}
+            image={images[post.id]}
           />
         ))}
       </ul>
@@ -212,6 +224,7 @@ function PostCard({
   isSelected,
   onToggle,
   mode,
+  image,
 }: {
   post: PostWithExtras;
   platform: SelectionPlatform;
@@ -222,6 +235,7 @@ function PostCard({
   isSelected: boolean;
   onToggle: (next: boolean) => void;
   mode: "reviewing" | "cancelled";
+  image: PostImageStatus | undefined;
 }) {
   const text = textFor(post, platform);
   const hashtags = hashtagsFor(post, platform);
@@ -256,15 +270,14 @@ function PostCard({
         {NETWORK_ICON[platform]}
       </div>
 
-      {/* Phase 3 will replace this placeholder rectangle with the real
-          image (one base image per post, resized client-side or by the
-          posting service per network — see spec D12). */}
-      <div
-        className={`bg-muted rounded-lg ${aspectClass} flex items-center justify-center text-xs text-muted-foreground`}
-        aria-hidden
-      >
-        Image — Phase 3
-      </div>
+      <PostTileImage
+        image={image}
+        aspectClass={aspectClass}
+        alt={`Generated image for post ${post.postOrder}`}
+      />
+      {/* Per-network resizing happens later (posting service per network
+          — see spec D12); Wave 1 shows one shared image at the tile's
+          natural aspect ratio. */}
 
       <div className="space-y-2 flex-1 user-text">
         <p className="text-sm leading-7 whitespace-pre-wrap">{text}</p>

@@ -18,6 +18,7 @@ import {
   type PostWithExtras,
   textFor,
 } from "@/components/posts/network-preview";
+import { PostTileImage } from "@/components/posts/post-tile-image";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -32,7 +33,10 @@ import {
   postingDaysOrFallback,
 } from "@/lib/scheduling/batch-calendar";
 import type { PostingDays, SelectionPlatform } from "@/lib/schema";
-import type { BatchForReview } from "@/lib/services/post-service";
+import type {
+  BatchForReview,
+  PostImageStatus,
+} from "@/lib/services/post-service";
 
 /**
  * Final wizard step — the commit page.
@@ -81,6 +85,7 @@ export function WizardSummary({
   selections,
   onSetSelection,
   mode,
+  images,
 }: {
   batch: BatchForReview["batch"];
   posts: BatchForReview["posts"];
@@ -92,6 +97,12 @@ export function WizardSummary({
     next: boolean
   ) => void;
   mode: "reviewing" | "cancelled";
+  /**
+   * Image-generation Wave 1 Stage 5: per-post image status map. Same
+   * shape and source as on `<WizardStep />`; threaded through to
+   * `<SummaryCard />` by post id.
+   */
+  images: Record<string, PostImageStatus>;
 }) {
   const isCancelled = mode === "cancelled";
 
@@ -216,6 +227,7 @@ export function WizardSummary({
                 dayWindow={dayWindowOrFallback(batch)}
                 postingDays={postingDaysOrFallback(batch)}
                 onRemove={() => handleRemove(item)}
+                image={images[item.post.id]}
               />
             ))}
           </ul>
@@ -305,6 +317,7 @@ function SummaryCard({
   dayWindow,
   postingDays,
   onRemove,
+  image,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
@@ -312,6 +325,7 @@ function SummaryCard({
   dayWindow: number;
   postingDays: PostingDays;
   onRemove: () => void;
+  image: PostImageStatus | undefined;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -333,14 +347,11 @@ function SummaryCard({
         <NetworkBadge platform={platform} />
       </div>
 
-      {/* Same Phase-3 image placeholder as the per-network step cards,
-          shaped to the network's conventional feed aspect ratio. */}
-      <div
-        className={`bg-muted rounded-lg ${aspectClass} flex items-center justify-center text-xs text-muted-foreground`}
-        aria-hidden
-      >
-        Image — Phase 3
-      </div>
+      <PostTileImage
+        image={image}
+        aspectClass={aspectClass}
+        alt={`Generated image for post ${post.postOrder}`}
+      />
 
       <div className="space-y-2 flex-1 user-text">
         <p className="text-sm leading-7 whitespace-pre-wrap">{text}</p>

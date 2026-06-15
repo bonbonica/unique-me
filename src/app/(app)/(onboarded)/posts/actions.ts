@@ -25,6 +25,15 @@ async function requireSession() {
   return session;
 }
 
+// Used by <NetworkWizard /> polling (Image-gen Wave 1 Stage 5). Returns
+// the per-post image-status map for the batch. Cheap single-query read,
+// safe to call every ~2.5s while any tile is still pending/generating.
+// Ownership is enforced inside the service via the posts.userId join.
+export async function getBatchImageStatusesAction(batchId: string) {
+  const session = await requireSession();
+  return await postService.getBatchImageStatuses(batchId, session.user.id);
+}
+
 // Used by <WizardStep /> (task-09).
 export async function selectForNetworkAction(
   postId: string,

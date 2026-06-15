@@ -140,6 +140,18 @@ export type RestorePostResult =
       error: "not_found" | "not_owned" | "not_restorable" | "db_failed";
     };
 
+/**
+ * Image-generation Wave 1 status snapshot for one post. Returned as part of
+ * {@link BatchForReview} for SSR, and from {@link getBatchImageStatuses}
+ * for client polling. `imageUrl` is null for any state other than
+ * `"success"` (invariant enforced by the column nullability + the
+ * runImageGenerationForBatch flow).
+ */
+export type PostImageStatus = {
+  status: "pending" | "generating" | "success" | "failed";
+  imageUrl: string | null;
+};
+
 export type BatchForReview = {
   batch: WeeklyBatch;
   platforms: SelectionPlatform[];
@@ -149,6 +161,13 @@ export type BatchForReview = {
       selections: SelectionPlatform[];
     }
   >;
+  /**
+   * Image-generation Wave 1: per-post image status, keyed by `post.id`. A
+   * post with no `post_images` row (pre-Wave-1 legacy batches) is simply
+   * absent from this record — UI components treat `undefined` as
+   * "no image to show" without distinguishing it from `failed`.
+   */
+  images: Record<string, PostImageStatus>;
 };
 
 /**
@@ -765,6 +784,23 @@ export async function getBatchForReview(
           .where(inArray(postSelections.postId, postIds))
       : [];
 
+  // Image-generation Wave 1: per-post image status. Loaded as part of the
+  // initial SSR so the first paint shows the correct skeleton / image
+  // state without flicker. Pre-Wave-1 batches have no rows here; the
+  // resulting `images` record is empty and downstream components render
+  // a no-image placeholder for posts missing from the map.
+  const imageRows =
+    postIds.length > 0
+      ? await db
+          .select({
+            postId: postImages.postId,
+            status: postImages.status,
+            imageUrl: postImages.imageUrl,
+          })
+          .from(postImages)
+          .where(inArray(postImages.postId, postIds))
+      : [];
+
   const variationsByPostId = new Map<
     string,
     { instagram?: PostVariation; linkedin?: PostVariation }
@@ -783,6 +819,17 @@ export async function getBatchForReview(
     selectionsByPostId.set(s.postId, slot);
   }
 
+  const images: Record<string, PostImageStatus> = {};
+  for (const r of imageRows) {
+    // Defensive cast: status is `text` in Drizzle; runtime values are
+    // constrained by the service layer (runImageGenerationForBatch + the
+    // pending-row pre-insert in generateWeekly).
+    images[r.postId] = {
+      status: r.status as PostImageStatus["status"],
+      imageUrl: r.imageUrl,
+    };
+  }
+
   return {
     batch,
     platforms,
@@ -791,7 +838,45 @@ export async function getBatchForReview(
       variations: variationsByPostId.get(p.id) ?? {},
       selections: selectionsByPostId.get(p.id) ?? [],
     })),
+    images,
   };
+}
+
+/**
+ * Image-generation Wave 1 polling endpoint. Returns the per-post image-
+ * status map for `batchId`, ownership-gated against `sessionUserId` via
+ * the `posts.userId` join. Returns an empty record when:
+ *   - The batch doesn't exist or isn't owned by the session user (no
+ *     rows match the join's WHERE clause).
+ *   - The batch is pre-Wave-1 (no `post_images` rows).
+ *
+ * Same return shape as {@link BatchForReview.images}, so the client can
+ * merge polling results into its initial-SSR state with one
+ * `Object.assign`. Single query — cheap to poll every ~2.5s while any
+ * row is `"pending"` or `"generating"`.
+ */
+export async function getBatchImageStatuses(
+  batchId: string,
+  sessionUserId: string,
+): Promise<Record<string, PostImageStatus>> {
+  const rows = await db
+    .select({
+      postId: postImages.postId,
+      status: postImages.status,
+      imageUrl: postImages.imageUrl,
+    })
+    .from(postImages)
+    .innerJoin(posts, eq(postImages.postId, posts.id))
+    .where(and(eq(posts.batchId, batchId), eq(posts.userId, sessionUserId)));
+
+  const out: Record<string, PostImageStatus> = {};
+  for (const r of rows) {
+    out[r.postId] = {
+      status: r.status as PostImageStatus["status"],
+      imageUrl: r.imageUrl,
+    };
+  }
+  return out;
 }
 
 // =============================================================================

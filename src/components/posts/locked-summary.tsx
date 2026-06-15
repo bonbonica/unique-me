@@ -14,6 +14,7 @@ import {
   type PostWithExtras,
   textFor,
 } from "@/components/posts/network-preview";
+import { PostTileImage } from "@/components/posts/post-tile-image";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,7 +30,10 @@ import {
   postingDaysOrFallback,
 } from "@/lib/scheduling/batch-calendar";
 import type { PostingDays, SelectionPlatform } from "@/lib/schema";
-import type { BatchForReview } from "@/lib/services/post-service";
+import type {
+  BatchForReview,
+  PostImageStatus,
+} from "@/lib/services/post-service";
 
 /**
  * Post-commit / cancelled view (Wave 5 polish). Same large-card layout as
@@ -210,6 +214,7 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
               totalPosts={data.batch.totalPosts}
               dayWindow={dayWindowOrFallback(data.batch)}
               postingDays={postingDaysOrFallback(data.batch)}
+              image={data.images[item.post.id]}
             />
           ))}
         </ul>
@@ -247,12 +252,20 @@ function LockedCard({
   totalPosts,
   dayWindow,
   postingDays,
+  image,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
   totalPosts: number;
   dayWindow: number;
   postingDays: PostingDays;
+  /**
+   * Image-generation Wave 1 Stage 5: per-post image status. By the time
+   * a batch reaches `scheduling`, images should be terminal (success or
+   * failed) — `<LockedSummary />` deliberately does NOT poll. The card
+   * just renders whatever state is in the SSR snapshot.
+   */
+  image: PostImageStatus | undefined;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -268,12 +281,11 @@ function LockedCard({
         <NetworkBadge platform={platform} />
       </div>
 
-      <div
-        className={`bg-muted rounded-lg ${aspectClass} flex items-center justify-center text-xs text-muted-foreground`}
-        aria-hidden
-      >
-        Image — Phase 3
-      </div>
+      <PostTileImage
+        image={image}
+        aspectClass={aspectClass}
+        alt={`Generated image for post ${post.postOrder}`}
+      />
 
       {/* Phase-4 date slot. `<DayLabel />` resolves the weekday in the
           user's browser timezone (Phase 3 spec D8) via the same
