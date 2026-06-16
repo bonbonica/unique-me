@@ -1,5 +1,6 @@
 import "server-only";
 
+import { after } from "next/server";
 import { del } from "@vercel/blob";
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
 import pLimit from "p-limit";
@@ -13,6 +14,7 @@ import {
   posts,
 } from "@/lib/schema";
 import { upload } from "@/lib/storage";
+import * as subscriptionService from "./subscription-service";
 
 /**
  * Stage-2 D-S2-9. The single orchestrator for the Vercel Blob lifecycle. Every
@@ -423,4 +425,262 @@ export async function runImageGenerationForBatch(
       { batchId, err },
     );
   }
+}
+
+// ============================================================================
+// Image-generation Wave 2 — single-row retry + regenerate
+// ============================================================================
+
+type RetryReason =
+  | "not_owned"
+  | "not_failed"
+  | "attempts_exhausted"
+  | "already_in_progress";
+
+type RegenerateReason =
+  | "not_owned"
+  | "not_successful"
+  | "attempts_exhausted"
+  | "already_in_progress"
+  | "pro_required";
+
+export type RetryImageResult =
+  | { ok: true }
+  | { ok: false; reason: RetryReason };
+
+export type RegenerateImageResult =
+  | { ok: true }
+  | { ok: false; reason: RegenerateReason };
+
+/**
+ * Wave 2 single-row analog of {@link runImageGenerationForBatch}. Drives one
+ * `post_images` row through the OpenAI → Blob → DB lifecycle. Called from
+ * {@link retryImage} / {@link regenerateImage} via `after()` from `next/server`
+ * so the user's HTTP response returns before the OpenAI call starts.
+ *
+ * Mode dispatch only differs on the failure path:
+ *  - `mode="retry"`: failure → `status="failed"`. Attempt is already at 2, so
+ *    the tile will render the exhausted "Couldn't generate this image."
+ *    message after the next poll tick.
+ *  - `mode="regenerate"`: failure → `status="success"` and `imageUrl` is left
+ *    UNTOUCHED. The original image survives. The polling client compares the
+ *    pre-regenerate URL snapshot against the post-regenerate URL and fires
+ *    the "kept original" toast when they match.
+ *
+ * Never throws. Single row → no `pLimit` (the batch fan-out caps OpenAI
+ * concurrency; a single-row click can't outrun anything).
+ *
+ * Blob lifecycle note: on regenerate-success the previous `imageUrl` is
+ * orphaned (the row now points at the new blob). Blob cleanup is Wave 3
+ * scope per `specs/wave-2-image-retry/spec.md` §Out of scope.
+ */
+export async function runImageGenerationForRow(
+  postImageId: string,
+  mode: "retry" | "regenerate",
+): Promise<void> {
+  try {
+    const rows = await db
+      .select({
+        id: postImages.id,
+        imagePrompt: postImages.imagePrompt,
+        batchId: posts.batchId,
+      })
+      .from(postImages)
+      .innerJoin(posts, eq(postImages.postId, posts.id))
+      .where(eq(postImages.id, postImageId))
+      .limit(1);
+
+    const row = rows[0];
+    if (!row) {
+      console.error(
+        "[image-service] runImageGenerationForRow: row not found",
+        { postImageId, mode },
+      );
+      return;
+    }
+
+    const result = await generateImage({ combinedPrompt: row.imagePrompt });
+
+    if (!result) {
+      await db
+        .update(postImages)
+        .set({ status: mode === "retry" ? "failed" : "success" })
+        .where(eq(postImages.id, row.id))
+        .catch((dbErr) => {
+          console.error(
+            "[image-service] could not mark row terminal after generate null",
+            { rowId: row.id, mode, dbErr },
+          );
+        });
+      return;
+    }
+
+    const stored = await upload(
+      result.imageBuffer,
+      `${row.id}.png`,
+      `post-images/${row.batchId}`,
+      { maxSize: 10 * 1024 * 1024 },
+    );
+
+    await db
+      .update(postImages)
+      .set({ status: "success", imageUrl: stored.url })
+      .where(eq(postImages.id, row.id));
+  } catch (err) {
+    console.error("[image-service] runImageGenerationForRow failed", {
+      postImageId,
+      mode,
+      err,
+    });
+    // Best-effort terminal recovery so the row doesn't stick in
+    // generating/regenerating. retry → failed; regenerate → success
+    // (imageUrl unchanged). If this also throws the row stays in its
+    // in-flight status until a future reaper job (out of scope for Wave 2).
+    await db
+      .update(postImages)
+      .set({ status: mode === "retry" ? "failed" : "success" })
+      .where(eq(postImages.id, postImageId))
+      .catch((dbErr) => {
+        console.error(
+          "[image-service] terminal recovery write also failed",
+          { postImageId, mode, dbErr },
+        );
+      });
+  }
+}
+
+/**
+ * Manually retry image generation for a single FAILED row. All tiers.
+ *
+ * Atomic conditional UPDATE — only matches when the row is owned, status is
+ * "failed", and attempt is 1. Two simultaneous clicks: one wins, the other's
+ * UPDATE matches 0 rows and resolves to `reason: "already_in_progress"` via
+ * the post-fail re-SELECT.
+ *
+ * Schedules {@link runImageGenerationForRow} via `after()` so the caller's
+ * server-action response returns immediately.
+ */
+export async function retryImage(
+  postImageId: string,
+  sessionUserId: string,
+): Promise<RetryImageResult> {
+  const updated = await db
+    .update(postImages)
+    .set({ status: "generating", attempt: 2 })
+    .where(
+      and(
+        eq(postImages.id, postImageId),
+        eq(postImages.userId, sessionUserId),
+        eq(postImages.status, "failed"),
+        eq(postImages.attempt, 1),
+      ),
+    )
+    .returning({ id: postImages.id });
+
+  if (updated.length === 0) {
+    return {
+      ok: false,
+      reason: await mapRetryFailureReason(postImageId, sessionUserId),
+    };
+  }
+
+  after(() => runImageGenerationForRow(postImageId, "retry"));
+  return { ok: true };
+}
+
+/**
+ * Manually replace a successful image with a new attempt. Pro + active only.
+ *
+ * Tier gate runs BEFORE any DB write (cheap rejection for non-Pro). On
+ * success the conditional UPDATE flips status to "regenerating" while
+ * leaving `imageUrl` intact — the UI keeps showing the original (dimmed)
+ * until attempt 2 lands. Regenerate-failure inside
+ * {@link runImageGenerationForRow} reverts status to "success" without
+ * touching `imageUrl`, so the user never loses good content.
+ */
+export async function regenerateImage(
+  postImageId: string,
+  sessionUserId: string,
+): Promise<RegenerateImageResult> {
+  const sub = await subscriptionService.checkSubscription(sessionUserId);
+  if (!(sub.plan === "pro" && sub.status === "active")) {
+    return { ok: false, reason: "pro_required" };
+  }
+
+  const updated = await db
+    .update(postImages)
+    .set({ status: "regenerating", attempt: 2 })
+    .where(
+      and(
+        eq(postImages.id, postImageId),
+        eq(postImages.userId, sessionUserId),
+        eq(postImages.status, "success"),
+        eq(postImages.attempt, 1),
+      ),
+    )
+    .returning({ id: postImages.id });
+
+  if (updated.length === 0) {
+    return {
+      ok: false,
+      reason: await mapRegenerateFailureReason(postImageId, sessionUserId),
+    };
+  }
+
+  after(() => runImageGenerationForRow(postImageId, "regenerate"));
+  return { ok: true };
+}
+
+/**
+ * Re-SELECT the row after a failed conditional UPDATE in {@link retryImage}
+ * to determine which precondition the caller violated. "Row missing" and
+ * "wrong owner" both map to `not_owned` so existence isn't leaked. In-flight
+ * status takes precedence over the attempt cap so a user who double-clicks
+ * sees "already retrying" rather than the misleading "no more attempts".
+ */
+async function mapRetryFailureReason(
+  postImageId: string,
+  sessionUserId: string,
+): Promise<RetryReason> {
+  const rows = await db
+    .select({
+      userId: postImages.userId,
+      status: postImages.status,
+      attempt: postImages.attempt,
+    })
+    .from(postImages)
+    .where(eq(postImages.id, postImageId))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row || row.userId !== sessionUserId) return "not_owned";
+  if (row.status === "generating" || row.status === "regenerating") {
+    return "already_in_progress";
+  }
+  if (row.attempt >= 2) return "attempts_exhausted";
+  return "not_failed";
+}
+
+/** Sibling of {@link mapRetryFailureReason} for the regenerate flow. */
+async function mapRegenerateFailureReason(
+  postImageId: string,
+  sessionUserId: string,
+): Promise<Exclude<RegenerateReason, "pro_required">> {
+  const rows = await db
+    .select({
+      userId: postImages.userId,
+      status: postImages.status,
+      attempt: postImages.attempt,
+    })
+    .from(postImages)
+    .where(eq(postImages.id, postImageId))
+    .limit(1);
+
+  const row = rows[0];
+  if (!row || row.userId !== sessionUserId) return "not_owned";
+  if (row.status === "generating" || row.status === "regenerating") {
+    return "already_in_progress";
+  }
+  if (row.attempt >= 2) return "attempts_exhausted";
+  return "not_successful";
 }

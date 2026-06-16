@@ -4,7 +4,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import type { SelectionPlatform } from "@/lib/schema";
-import { postService } from "@/lib/services";
+import { imageService, postService } from "@/lib/services";
 
 /**
  * Server actions backing `/posts` interactions (Phase 2 task-08). Each
@@ -88,4 +88,20 @@ export async function rescheduleAction(batchId: string) {
 export async function stopBatchAction(batchId: string) {
   const session = await requireSession();
   return await postService.stopBatch(batchId, session.user.id);
+}
+
+// Used by <PostTileImage /> retry button (Image-gen Wave 2 Stage 3). Visible
+// on failed tiles for all tiers. Ownership + attempt-cap + in-flight guards
+// live inside imageService.retryImage; this wrapper just threads the session.
+export async function retryImageAction(postImageId: string) {
+  const session = await requireSession();
+  return await imageService.retryImage(postImageId, session.user.id);
+}
+
+// Used by <PostTileImage /> regenerate icon (Image-gen Wave 2 Stage 4).
+// Visible on successful tiles for Pro+active users only. Tier gate runs
+// inside imageService.regenerateImage before any DB write.
+export async function regenerateImageAction(postImageId: string) {
+  const session = await requireSession();
+  return await imageService.regenerateImage(postImageId, session.user.id);
 }

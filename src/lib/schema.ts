@@ -360,9 +360,14 @@ export const postImages = pgTable(
     selected: boolean("selected").default(false).notNull(),
     // Union: "ai" | "uploaded" | "library".
     source: text("source").notNull(),
-    // Union: "pending" | "generating" | "success" | "failed". Lifecycle:
-    // INSERT with "pending" → "generating" when OpenAI call starts →
-    // "success" (image_url written) or "failed" (OpenAI / Blob threw).
+    // Union: "pending" | "generating" | "success" | "failed" | "regenerating".
+    // Lifecycle: INSERT with "pending" → "generating" when OpenAI call starts
+    // → "success" (image_url written) or "failed" (OpenAI / Blob threw).
+    // Wave 2 retry/regenerate (attempt=2): a "failed" row can transition back
+    // to "generating" (retry, all tiers) and a "success" row to "regenerating"
+    // (Pro-only). "regenerating" preserves image_url so the tile can show the
+    // original dimmed while attempt 2 is in flight; on regenerate failure the
+    // row reverts to "success" with image_url intact (original survives).
     // Default "pending" so pre-Wave-1 inserts not aware of the column
     // still produce a sensible row state.
     status: text("status").notNull().default("pending"),

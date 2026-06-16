@@ -148,7 +148,7 @@ export type RestorePostResult =
  * runImageGenerationForBatch flow).
  */
 export type PostImageStatus = {
-  status: "pending" | "generating" | "success" | "failed";
+  status: "pending" | "generating" | "success" | "failed" | "regenerating";
   imageUrl: string | null;
 };
 
