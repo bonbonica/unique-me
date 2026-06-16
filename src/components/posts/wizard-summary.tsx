@@ -86,6 +86,7 @@ export function WizardSummary({
   onSetSelection,
   mode,
   images,
+  onImageRetry,
 }: {
   batch: BatchForReview["batch"];
   posts: BatchForReview["posts"];
@@ -103,6 +104,12 @@ export function WizardSummary({
    * `<SummaryCard />` by post id.
    */
   images: Record<string, PostImageStatus>;
+  /**
+   * Image-generation Wave 2 Stage 3: retry callback fired by the tile's
+   * "Try again" button on a failed image. Threaded through to SummaryCard
+   * → PostTileImage as the `onRetry` prop.
+   */
+  onImageRetry?: ((postId: string) => void) | undefined;
 }) {
   const isCancelled = mode === "cancelled";
 
@@ -228,6 +235,7 @@ export function WizardSummary({
                 postingDays={postingDaysOrFallback(batch)}
                 onRemove={() => handleRemove(item)}
                 image={images[item.post.id]}
+                onImageRetry={onImageRetry}
               />
             ))}
           </ul>
@@ -318,6 +326,7 @@ function SummaryCard({
   postingDays,
   onRemove,
   image,
+  onImageRetry,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
@@ -326,6 +335,7 @@ function SummaryCard({
   postingDays: PostingDays;
   onRemove: () => void;
   image: PostImageStatus | undefined;
+  onImageRetry?: ((postId: string) => void) | undefined;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -351,6 +361,8 @@ function SummaryCard({
         image={image}
         aspectClass={aspectClass}
         alt={`Generated image for post ${post.postOrder}`}
+        onRetry={onImageRetry}
+        postId={item.post.id}
       />
 
       <div className="space-y-2 flex-1 user-text">

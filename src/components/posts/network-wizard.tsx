@@ -2,9 +2,11 @@
 
 import { useEffect, useRef, useState, useTransition } from "react";
 import { Check } from "lucide-react";
+import { toast } from "sonner";
 import {
   deselectForNetworkAction,
   getBatchImageStatusesAction,
+  retryImageAction,
   selectForNetworkAction,
 } from "@/app/(app)/(onboarded)/posts/actions";
 import { WizardNav } from "@/components/posts/wizard-nav";
@@ -41,6 +43,27 @@ function anyPending(images: Record<string, PostImageStatus>): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Wave 2 Stage 3: map server reason codes from {@link retryImageAction} to
+ * user-facing toast copy. Voice follows DESIGN.md §14: no exclamation points,
+ * plain confident verbs. Single source of truth so retry + (future Stage 4)
+ * regenerate handlers don't drift from each other.
+ */
+function retryReasonCopy(reason: string): string {
+  switch (reason) {
+    case "not_owned":
+      return "You don't have access to this image.";
+    case "not_failed":
+      return "This image was already updated. Refresh to see the latest.";
+    case "attempts_exhausted":
+      return "No more attempts left for this image.";
+    case "already_in_progress":
+      return "Already retrying — give it a moment.";
+    default:
+      return "Something went wrong. Try again in a moment.";
+  }
 }
 
 /**
@@ -178,6 +201,55 @@ export function NetworkWizard({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.batch.id]);
 
+  /**
+   * Wave 2 Stage 3 retry handler. Optimistically flips the tile to the
+   * `generating` skeleton, fires the server action, and reverts on failure
+   * with a toast. Concurrency safety lives at the server (conditional
+   * UPDATE); this handler just keeps the UI honest in the meantime.
+   *
+   * Guards re-check the slot via `imagesRef` so a double-click can't
+   * decrement attempt back to 1 on a race — only the first invocation
+   * passes the `status === "failed"` gate.
+   */
+  async function handleRetry(postId: string) {
+    const current = imagesRef.current[postId];
+    if (!current || current.status !== "failed" || current.attempt >= 2) {
+      return;
+    }
+    const postImageId = current.id;
+
+    setImages((prev) => {
+      const existing = prev[postId];
+      if (!existing || existing.status !== "failed") return prev;
+      return {
+        ...prev,
+        [postId]: { ...existing, status: "generating", attempt: 2 },
+      };
+    });
+
+    const revert = () =>
+      setImages((prev) => {
+        const existing = prev[postId];
+        if (!existing || existing.status !== "generating") return prev;
+        return {
+          ...prev,
+          [postId]: { ...existing, status: "failed", attempt: 1 },
+        };
+      });
+
+    try {
+      const result = await retryImageAction(postImageId);
+      if (!result.ok) {
+        revert();
+        toast.error(retryReasonCopy(result.reason));
+      }
+    } catch (err) {
+      console.error("[network-wizard] retryImageAction threw", err);
+      revert();
+      toast.error(retryReasonCopy("network"));
+    }
+  }
+
   // Defensive: the parent page redirects to /onboarding when platforms is
   // empty, so this case shouldn't render here. Belt-and-braces.
   if (platforms.length === 0) {
@@ -298,6 +370,7 @@ export function NetworkWizard({
           onDeselectAllForPlatform={deselectAllForPlatform}
           mode={mode}
           images={images}
+          onImageRetry={handleRetry}
         />
       ) : (
         <WizardSummary
@@ -308,6 +381,7 @@ export function NetworkWizard({
           onSetSelection={setSelection}
           mode={mode}
           images={images}
+          onImageRetry={handleRetry}
         />
       )}
 

@@ -154,6 +154,11 @@ export type PostImageStatus = {
   // reads this to decide whether to render the retry/regenerate control
   // (attempt < 2) or the exhausted-state message (attempt >= 2).
   attempt: number;
+  // Wave 2: the `post_images` row id. Surfaced so tiles can hand it back
+  // to retryImageAction / regenerateImageAction without a second lookup.
+  // The outer Record is keyed by `postId` (NOT this id) so the UI can
+  // render one tile per post.
+  id: string;
 };
 
 export type BatchForReview = {
@@ -797,6 +802,7 @@ export async function getBatchForReview(
     postIds.length > 0
       ? await db
           .select({
+            id: postImages.id,
             postId: postImages.postId,
             status: postImages.status,
             imageUrl: postImages.imageUrl,
@@ -830,6 +836,7 @@ export async function getBatchForReview(
     // constrained by the service layer (runImageGenerationForBatch + the
     // pending-row pre-insert in generateWeekly).
     images[r.postId] = {
+      id: r.id,
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
       attempt: r.attempt,
@@ -867,6 +874,7 @@ export async function getBatchImageStatuses(
 ): Promise<Record<string, PostImageStatus>> {
   const rows = await db
     .select({
+      id: postImages.id,
       postId: postImages.postId,
       status: postImages.status,
       imageUrl: postImages.imageUrl,
@@ -879,6 +887,7 @@ export async function getBatchImageStatuses(
   const out: Record<string, PostImageStatus> = {};
   for (const r of rows) {
     out[r.postId] = {
+      id: r.id,
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
       attempt: r.attempt,

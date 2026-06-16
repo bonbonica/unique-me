@@ -83,6 +83,7 @@ export function WizardStep({
   onDeselectAllForPlatform,
   mode,
   images,
+  onImageRetry,
 }: {
   platform: SelectionPlatform;
   posts: BatchForReview["posts"];
@@ -105,6 +106,12 @@ export function WizardStep({
    * pending tiles flip to success/failed. Passed through to PostCard.
    */
   images: Record<string, PostImageStatus>;
+  /**
+   * Image-generation Wave 2 Stage 3: retry callback fired by the tile's
+   * "Try again" button on a failed image. Threaded through to PostCard
+   * → PostTileImage as the `onRetry` prop.
+   */
+  onImageRetry?: ((postId: string) => void) | undefined;
 }) {
   const selectedIds = selections[platform];
   const selectedCount = selectedIds.length;
@@ -207,6 +214,7 @@ export function WizardStep({
             onToggle={(next) => onSetSelection(post.id, platform, next)}
             mode={mode}
             image={images[post.id]}
+            onImageRetry={onImageRetry}
           />
         ))}
       </ul>
@@ -225,6 +233,7 @@ function PostCard({
   onToggle,
   mode,
   image,
+  onImageRetry,
 }: {
   post: PostWithExtras;
   platform: SelectionPlatform;
@@ -236,6 +245,7 @@ function PostCard({
   onToggle: (next: boolean) => void;
   mode: "reviewing" | "cancelled";
   image: PostImageStatus | undefined;
+  onImageRetry?: ((postId: string) => void) | undefined;
 }) {
   const text = textFor(post, platform);
   const hashtags = hashtagsFor(post, platform);
@@ -274,6 +284,8 @@ function PostCard({
         image={image}
         aspectClass={aspectClass}
         alt={`Generated image for post ${post.postOrder}`}
+        onRetry={onImageRetry}
+        postId={post.id}
       />
       {/* Per-network resizing happens later (posting service per network
           — see spec D12); Wave 1 shows one shared image at the tile's
