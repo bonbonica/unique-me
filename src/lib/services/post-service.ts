@@ -150,6 +150,10 @@ export type RestorePostResult =
 export type PostImageStatus = {
   status: "pending" | "generating" | "success" | "failed" | "regenerating";
   imageUrl: string | null;
+  // Wave 2: 1 = original generation, 2 = used the retry/regenerate. The UI
+  // reads this to decide whether to render the retry/regenerate control
+  // (attempt < 2) or the exhausted-state message (attempt >= 2).
+  attempt: number;
 };
 
 export type BatchForReview = {
@@ -796,6 +800,7 @@ export async function getBatchForReview(
             postId: postImages.postId,
             status: postImages.status,
             imageUrl: postImages.imageUrl,
+            attempt: postImages.attempt,
           })
           .from(postImages)
           .where(inArray(postImages.postId, postIds))
@@ -827,6 +832,7 @@ export async function getBatchForReview(
     images[r.postId] = {
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
+      attempt: r.attempt,
     };
   }
 
@@ -864,6 +870,7 @@ export async function getBatchImageStatuses(
       postId: postImages.postId,
       status: postImages.status,
       imageUrl: postImages.imageUrl,
+      attempt: postImages.attempt,
     })
     .from(postImages)
     .innerJoin(posts, eq(postImages.postId, posts.id))
@@ -874,6 +881,7 @@ export async function getBatchImageStatuses(
     out[r.postId] = {
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
+      attempt: r.attempt,
     };
   }
   return out;

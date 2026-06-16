@@ -32,7 +32,13 @@ const IMAGE_POLL_INTERVAL_MS = 2500;
 
 function anyPending(images: Record<string, PostImageStatus>): boolean {
   for (const img of Object.values(images)) {
-    if (img.status === "pending" || img.status === "generating") return true;
+    if (
+      img.status === "pending" ||
+      img.status === "generating" ||
+      img.status === "regenerating"
+    ) {
+      return true;
+    }
   }
   return false;
 }
