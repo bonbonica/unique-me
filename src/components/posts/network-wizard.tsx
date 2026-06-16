@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   deselectForNetworkAction,
   getBatchImageStatusesAction,
+  regenerateImageAction,
   retryImageAction,
   selectForNetworkAction,
 } from "@/app/(app)/(onboarded)/posts/actions";
@@ -48,8 +49,7 @@ function anyPending(images: Record<string, PostImageStatus>): boolean {
 /**
  * Wave 2 Stage 3: map server reason codes from {@link retryImageAction} to
  * user-facing toast copy. Voice follows DESIGN.md §14: no exclamation points,
- * plain confident verbs. Single source of truth so retry + (future Stage 4)
- * regenerate handlers don't drift from each other.
+ * plain confident verbs.
  */
 function retryReasonCopy(reason: string): string {
   switch (reason) {
@@ -61,6 +61,28 @@ function retryReasonCopy(reason: string): string {
       return "No more attempts left for this image.";
     case "already_in_progress":
       return "Already retrying — give it a moment.";
+    default:
+      return "Something went wrong. Try again in a moment.";
+  }
+}
+
+/**
+ * Wave 2 Stage 4 sibling of {@link retryReasonCopy} for regenerate codes.
+ * `pro_required` is a Pro-gate rejection — the client-side tile hides the
+ * icon for non-Pro users so this should be rare, but defense-in-depth.
+ */
+function regenerateReasonCopy(reason: string): string {
+  switch (reason) {
+    case "not_owned":
+      return "You don't have access to this image.";
+    case "not_successful":
+      return "This image was already updated. Refresh to see the latest.";
+    case "attempts_exhausted":
+      return "No more attempts left for this image.";
+    case "already_in_progress":
+      return "Already regenerating — give it a moment.";
+    case "pro_required":
+      return "Regenerating an image is a Pro feature.";
     default:
       return "Something went wrong. Try again in a moment.";
   }
@@ -120,6 +142,7 @@ function initialSelections(data: BatchForReview): SelectionsByPlatform {
 export function NetworkWizard({
   data,
   mode = "reviewing",
+  isPro,
 }: {
   data: BatchForReview;
   /**
@@ -132,6 +155,15 @@ export function NetworkWizard({
    * Regenerate button is hidden (no AI re-rolls in cancelled mode).
    */
   mode?: "reviewing" | "cancelled";
+  /**
+   * Image-generation Wave 2 Stage 4: whether the current user is on the
+   * Pro plan with an active subscription. Resolved server-side in the
+   * parent page and threaded down so the tile can decide whether to
+   * render the corner regenerate icon. The server action gates
+   * regardless; this prop only suppresses the affordance for non-Pro
+   * users so they don't see something they can't use.
+   */
+  isPro: boolean;
 }) {
   const platforms = PLATFORM_ORDER.filter((p) => data.platforms.includes(p));
   const totalSteps = platforms.length + 1;
@@ -164,6 +196,15 @@ export function NetworkWizard({
     imagesRef.current = images;
   });
 
+  // Image-generation Wave 2 Stage 4: per-tile snapshot of the pre-regenerate
+  // imageUrl. Populated by `handleRegenerate` on click, consumed by the
+  // polling tick once the row transitions back to `success` with attempt=2.
+  // If the URL is unchanged from the snapshot, the server reverted (regen
+  // failed and we preserved the original) — fire the "kept original" toast.
+  // Always deleted after the transition fires, success or fail, so the Map
+  // stays bounded by concurrent in-flight regenerates (max ~9 tiles).
+  const regenerateSnapshotsRef = useRef<Map<string, string>>(new Map());
+
   useEffect(() => {
     // Skip the poll entirely if every row is already terminal (page was
     // opened after all images had landed).
@@ -182,6 +223,26 @@ export function NetworkWizard({
       try {
         const fresh = await getBatchImageStatusesAction(data.batch.id);
         if (cancelled) return;
+
+        // Wave 2 Stage 4: detect regenerate completions BEFORE applying the
+        // poll update so we can compare the fresh imageUrl against the
+        // snapshot taken pre-click. Both outcomes (success-with-new-image
+        // and revert-to-original) land as status="success" + attempt=2;
+        // the URL comparison is what distinguishes them.
+        for (const [postId, originalUrl] of regenerateSnapshotsRef.current) {
+          const freshTile = fresh[postId];
+          if (
+            freshTile &&
+            freshTile.status === "success" &&
+            freshTile.attempt === 2
+          ) {
+            if (freshTile.imageUrl === originalUrl) {
+              toast.error("Regeneration failed. Kept the original image.");
+            }
+            regenerateSnapshotsRef.current.delete(postId);
+          }
+        }
+
         setImages((prev) => ({ ...prev, ...fresh }));
       } catch (err) {
         // Transient network errors shouldn't kill the loop — the next
@@ -247,6 +308,72 @@ export function NetworkWizard({
       console.error("[network-wizard] retryImageAction threw", err);
       revert();
       toast.error(retryReasonCopy("network"));
+    }
+  }
+
+  /**
+   * Wave 2 Stage 4 regenerate handler. Pro-only on the UI surface; the
+   * server enforces the tier gate regardless. Optimistic flip to
+   * `regenerating` keeps the original `imageUrl` visible (dimmed) so the
+   * user never sees a skeleton flash. On rejection we revert. On accept
+   * we hand the snapshot to the polling tick which fires the "kept
+   * original" toast if the URL is unchanged at attempt=2.
+   */
+  async function handleRegenerate(postId: string) {
+    const current = imagesRef.current[postId];
+    if (
+      !current ||
+      current.status !== "success" ||
+      current.attempt >= 2 ||
+      !current.imageUrl
+    ) {
+      return;
+    }
+    const postImageId = current.id;
+    const originalUrl = current.imageUrl;
+
+    setImages((prev) => {
+      const existing = prev[postId];
+      if (
+        !existing ||
+        existing.status !== "success" ||
+        !existing.imageUrl
+      ) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [postId]: { ...existing, status: "regenerating", attempt: 2 },
+      };
+    });
+
+    // Stash the pre-click URL so the polling tick can decide whether the
+    // eventual `regenerating → success` transition was a real new image
+    // (URL changed) or a preserved original (URL unchanged → toast).
+    regenerateSnapshotsRef.current.set(postId, originalUrl);
+
+    const revert = () => {
+      setImages((prev) => {
+        const existing = prev[postId];
+        if (!existing || existing.status !== "regenerating") return prev;
+        return {
+          ...prev,
+          [postId]: { ...existing, status: "success", attempt: 1 },
+        };
+      });
+      regenerateSnapshotsRef.current.delete(postId);
+    };
+
+    try {
+      const result = await regenerateImageAction(postImageId);
+      if (!result.ok) {
+        revert();
+        toast.error(regenerateReasonCopy(result.reason));
+      }
+    } catch (err) {
+      console.error("[network-wizard] regenerateImageAction threw", err);
+      revert();
+      toast.error(regenerateReasonCopy("network"));
     }
   }
 
@@ -371,6 +498,8 @@ export function NetworkWizard({
           mode={mode}
           images={images}
           onImageRetry={handleRetry}
+          isPro={isPro}
+          onImageRegenerate={handleRegenerate}
         />
       ) : (
         <WizardSummary
@@ -382,6 +511,8 @@ export function NetworkWizard({
           mode={mode}
           images={images}
           onImageRetry={handleRetry}
+          isPro={isPro}
+          onImageRegenerate={handleRegenerate}
         />
       )}
 

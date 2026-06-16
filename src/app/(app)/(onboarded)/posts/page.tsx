@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { LockedSummary } from "@/components/posts/locked-summary";
 import { NetworkWizard } from "@/components/posts/network-wizard";
 import { auth } from "@/lib/auth";
-import { postService } from "@/lib/services";
+import { postService, subscriptionService } from "@/lib/services";
 
 /**
  * `/posts` review page (Phase 2 task-08). Server component that loads the
@@ -60,16 +60,24 @@ export default async function PostsPage({
     redirect("/onboarding");
   }
 
+  // Image-generation Wave 2 Stage 4: Pro-only regenerate. Resolved
+  // server-side so the wizard can decide whether to render the corner
+  // regenerate icon without a client-side subscription round-trip.
+  // checkSubscription is authoritative; the client-side hide is a
+  // courtesy, the server action gates regardless.
+  const sub = await subscriptionService.checkSubscription(session.user.id);
+  const isPro = sub.plan === "pro" && sub.status === "active";
+
   switch (data.batch.status) {
     case "reviewing":
-      return <NetworkWizard data={data} mode="reviewing" />;
+      return <NetworkWizard data={data} mode="reviewing" isPro={isPro} />;
     case "cancelled":
       // Cancelled-recoverable flow (partial Item 6): the user can keep
       // editing posts, toggling selections, and re-scheduling within
       // their trial window. Phase 4's calendar will eventually close
       // the window after Day 7. Until then, cancelled === editable
       // wizard, not a dead end.
-      return <NetworkWizard data={data} mode="cancelled" />;
+      return <NetworkWizard data={data} mode="cancelled" isPro={isPro} />;
     case "scheduling":
       return <LockedSummary data={data} />;
     case "scheduled":

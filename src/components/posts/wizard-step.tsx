@@ -84,6 +84,8 @@ export function WizardStep({
   mode,
   images,
   onImageRetry,
+  isPro,
+  onImageRegenerate,
 }: {
   platform: SelectionPlatform;
   posts: BatchForReview["posts"];
@@ -112,6 +114,18 @@ export function WizardStep({
    * → PostTileImage as the `onRetry` prop.
    */
   onImageRetry?: ((postId: string) => void) | undefined;
+  /**
+   * Image-generation Wave 2 Stage 4: server-resolved Pro flag. Threaded
+   * through to PostTileImage so the corner regenerate icon shows only
+   * for Pro+active users. Server action gates regardless.
+   */
+  isPro: boolean;
+  /**
+   * Image-generation Wave 2 Stage 4: regenerate callback fired by the
+   * Pro corner icon on a successful image. Threaded through as
+   * `onRegenerate` on PostTileImage.
+   */
+  onImageRegenerate?: ((postId: string) => void) | undefined;
 }) {
   const selectedIds = selections[platform];
   const selectedCount = selectedIds.length;
@@ -215,6 +229,8 @@ export function WizardStep({
             mode={mode}
             image={images[post.id]}
             onImageRetry={onImageRetry}
+            isPro={isPro}
+            onImageRegenerate={onImageRegenerate}
           />
         ))}
       </ul>
@@ -234,6 +250,8 @@ function PostCard({
   mode,
   image,
   onImageRetry,
+  isPro,
+  onImageRegenerate,
 }: {
   post: PostWithExtras;
   platform: SelectionPlatform;
@@ -246,6 +264,8 @@ function PostCard({
   mode: "reviewing" | "cancelled";
   image: PostImageStatus | undefined;
   onImageRetry?: ((postId: string) => void) | undefined;
+  isPro: boolean;
+  onImageRegenerate?: ((postId: string) => void) | undefined;
 }) {
   const text = textFor(post, platform);
   const hashtags = hashtagsFor(post, platform);
@@ -286,6 +306,8 @@ function PostCard({
         alt={`Generated image for post ${post.postOrder}`}
         onRetry={onImageRetry}
         postId={post.id}
+        isPro={isPro}
+        onRegenerate={onImageRegenerate}
       />
       {/* Per-network resizing happens later (posting service per network
           — see spec D12); Wave 1 shows one shared image at the tile's

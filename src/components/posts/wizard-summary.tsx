@@ -87,6 +87,8 @@ export function WizardSummary({
   mode,
   images,
   onImageRetry,
+  isPro,
+  onImageRegenerate,
 }: {
   batch: BatchForReview["batch"];
   posts: BatchForReview["posts"];
@@ -110,6 +112,18 @@ export function WizardSummary({
    * → PostTileImage as the `onRetry` prop.
    */
   onImageRetry?: ((postId: string) => void) | undefined;
+  /**
+   * Image-generation Wave 2 Stage 4: server-resolved Pro flag. Threaded
+   * through to PostTileImage so the corner regenerate icon shows only
+   * for Pro+active users. Server action gates regardless.
+   */
+  isPro: boolean;
+  /**
+   * Image-generation Wave 2 Stage 4: regenerate callback fired by the
+   * Pro corner icon on a successful image. Threaded through as
+   * `onRegenerate` on PostTileImage.
+   */
+  onImageRegenerate?: ((postId: string) => void) | undefined;
 }) {
   const isCancelled = mode === "cancelled";
 
@@ -236,6 +250,8 @@ export function WizardSummary({
                 onRemove={() => handleRemove(item)}
                 image={images[item.post.id]}
                 onImageRetry={onImageRetry}
+                isPro={isPro}
+                onImageRegenerate={onImageRegenerate}
               />
             ))}
           </ul>
@@ -327,6 +343,8 @@ function SummaryCard({
   onRemove,
   image,
   onImageRetry,
+  isPro,
+  onImageRegenerate,
 }: {
   item: SummaryItem;
   batchCreatedAt: Date;
@@ -336,6 +354,8 @@ function SummaryCard({
   onRemove: () => void;
   image: PostImageStatus | undefined;
   onImageRetry?: ((postId: string) => void) | undefined;
+  isPro: boolean;
+  onImageRegenerate?: ((postId: string) => void) | undefined;
 }) {
   const { post, platform } = item;
   const text = textFor(post, platform);
@@ -363,6 +383,8 @@ function SummaryCard({
         alt={`Generated image for post ${post.postOrder}`}
         onRetry={onImageRetry}
         postId={item.post.id}
+        isPro={isPro}
+        onRegenerate={onImageRegenerate}
       />
 
       <div className="space-y-2 flex-1 user-text">
