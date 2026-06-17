@@ -72,9 +72,15 @@ export function PostTileImage({
             from arbitrary Blob URLs that next/image's loader would have
             to be configured to accept. Wave 1 favours simplicity here;
             optimisation can come later. */}
+        {/* Wave 2 cache-buster: `runImageGenerationForRow` overwrites the
+            blob at the same Vercel Blob URL (path = `<id>.png`), so a
+            successful regenerate produces NEW content at the SAME URL.
+            Without the query suffix, the browser serves its cached copy
+            even after polling updates state. Vercel's CDN ignores the
+            query string; the browser uses the full URL as its cache key. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={image.imageUrl}
+          src={`${image.imageUrl}?v=${image.attempt}-${image.status}`}
           alt={alt}
           className="absolute inset-0 w-full h-full object-cover"
           loading="lazy"
@@ -104,7 +110,7 @@ export function PostTileImage({
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={image.imageUrl}
+          src={`${image.imageUrl}?v=${image.attempt}-${image.status}`}
           alt={alt}
           className="absolute inset-0 w-full h-full object-cover opacity-60"
           loading="lazy"

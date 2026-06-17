@@ -205,10 +205,21 @@ export function NetworkWizard({
   // stays bounded by concurrent in-flight regenerates (max ~9 tiles).
   const regenerateSnapshotsRef = useRef<Map<string, string>>(new Map());
 
+  // Wave 2 polling-restart fix: derived from the CURRENT `images` state, not
+  // the initial SSR `data.images`. When a user clicks retry/regenerate AFTER
+  // all Wave 1 tiles have already settled, the optimistic local flip to
+  // 'generating' / 'regenerating' transitions this boolean false→true, the
+  // polling useEffect re-runs (deps changed), and a fresh interval starts.
+  // Without this, the effect mounted once with `anyPending=false` and never
+  // restarted — the new image landed in the DB but the tile sat in the
+  // optimistic state until a manual refresh.
+  const pollingNeeded = anyPending(images);
+
   useEffect(() => {
-    // Skip the poll entirely if every row is already terminal (page was
-    // opened after all images had landed).
-    if (!anyPending(data.images)) return;
+    // No pending work at this render — either Wave 1 finished before the
+    // user arrived, or a tick just completed the last in-flight job. Either
+    // way, no interval is needed until `pollingNeeded` flips back to true.
+    if (!pollingNeeded) return;
 
     let cancelled = false;
 
@@ -256,11 +267,11 @@ export function NetworkWizard({
       cancelled = true;
       clearInterval(intervalId);
     };
-    // We deliberately depend ONLY on batch.id (the URL the polling is
-    // tied to) so the interval isn't torn down on every state update.
-    // The tick reads the latest `images` via `imagesRef`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.batch.id]);
+    // `pollingNeeded` is the only state-derived dep — the effect re-runs
+    // when transitioning between "all terminal" and "some pending". The
+    // tick body still reads the latest `images` via `imagesRef` so we
+    // don't tear down the interval on every individual status update.
+  }, [data.batch.id, pollingNeeded]);
 
   /**
    * Wave 2 Stage 3 retry handler. Optimistically flips the tile to the
