@@ -91,7 +91,15 @@ export function PostTileImage({
             variant="ghost"
             size="icon"
             onClick={regenerateClick}
-            className="absolute top-3 right-3 opacity-70 hover:opacity-100"
+            // Rest = solid accent pill (what the ghost-variant hover used to
+            // look like) so the affordance is legible without hovering.
+            // Hover steps up to primary champagne — accent → primary is the
+            // brand's natural progression (accent is described as "hover
+            // states/highlights", primary as "CTAs/primary accents" in
+            // DESIGN.md §3). dark:hover:bg-primary is needed because the
+            // ghost variant's CVA emits `dark:hover:bg-accent/50`, which
+            // would otherwise win in dark mode via higher specificity.
+            className="absolute top-3 right-3 bg-accent text-accent-foreground hover:bg-primary hover:text-primary-foreground dark:hover:bg-primary"
             aria-label="Regenerate image"
           >
             <RefreshCw className="size-4" strokeWidth={1.5} aria-hidden />
