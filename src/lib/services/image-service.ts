@@ -2,7 +2,7 @@ import "server-only";
 
 import { after } from "next/server";
 import { del } from "@vercel/blob";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import pLimit from "p-limit";
 import { generateImage } from "@/lib/ai/image-generator";
 import { db } from "@/lib/db";
@@ -40,7 +40,15 @@ import * as subscriptionService from "./subscription-service";
  * bug; silent filter-to-owned is forbidden. Asserted in task-18 (scenario 5e).
  */
 
-const LIBRARY_CAP = 30;
+// Wave 3 image library: raised from 30 → 100. The cap is no longer enforced
+// by silent eviction at insert time (`retainImagesToLibrary`); enforcement
+// moved to `runMonthlyCleanup`, which fires on the user's first app open of
+// a new calendar month and respects locks + in-use protection. The library
+// can briefly exceed 100 between cleanups — intentional.
+//
+// Exported so Stage 2's `runMonthlyCleanup` and Stage 4's `count/N` pill
+// share a single source of truth (changing the cap is one diff).
+export const LIBRARY_CAP = 100;
 
 export type ImageServiceResult =
   | { ok: true }
@@ -88,12 +96,18 @@ async function safeDeleteBlob(url: string): Promise<void> {
  *
  * - Ownership-gated: rejects the whole batch with `not_owned` if any `postId`
  *   resolves to another user's `posts` row.
- * - Cap eviction: if `existingLibraryCount + newImageCount > 30`, the oldest
- *   `library_images` rows by `createdAt` are evicted first. Their blobs are
- *   deleted via {@link safeDeleteBlob} AFTER the transaction commits.
- * - The library insert + cap eviction share one `db.transaction` guarded by a
- *   per-user `pg_advisory_xact_lock` so concurrent retains can't both observe
- *   `count=30` and both insert.
+ * - Filters out rows whose `post_images.imageUrl` is NULL (Wave 1 nullable
+ *   column — only successful images carry a URL worth retaining).
+ * - Insert runs inside a `db.transaction` guarded by a per-user
+ *   `pg_advisory_xact_lock` so concurrent retains from multi-device sessions
+ *   don't race on the future `lockedAt` / `lastUsedAt` columns.
+ *
+ * **Wave 3 behavior change:** this function no longer evicts oldest rows when
+ * the user is over `LIBRARY_CAP`. Cap enforcement moved to
+ * {@link runMonthlyCleanup}, which fires on the first app open of a new
+ * calendar month and respects locks + in-use protection. The library can
+ * briefly exceed 100 between cleanups — intentional, matches the spec's
+ * "user-aware monthly cleanup" model.
  *
  * Caller is responsible for deleting the parent `posts` (or `weekly_batches`)
  * row(s) afterwards — cascade then removes `post_images`. This helper does NOT
@@ -131,19 +145,15 @@ export async function retainImagesToLibrary(
   // Image-generation Wave 1: `post_images.imageUrl` is nullable. A NULL means
   // the image never reached `status = 'success'` (still pending / generating
   // / failed), so there's no blob to retain. Filter these rows out before we
-  // size the eviction or insert into the library. Type predicate narrows the
-  // downstream array so `library_images.imageUrl` (NOT NULL) receives a
-  // string, not `string | null`.
+  // insert into the library. Type predicate narrows the downstream array so
+  // `library_images.imageUrl` (NOT NULL) receives a string, not `string | null`.
   const retainable = imageRows.filter(
     (r): r is typeof r & { imageUrl: string } => r.imageUrl !== null,
   );
   if (retainable.length === 0) return { ok: true };
 
-  // Collected during the txn, drained after commit so blob network calls
-  // never happen inside an open transaction.
-  const orphansToDelete: string[] = [];
-
-  // 2. Acquire per-user advisory lock + run cap eviction + insert in one txn.
+  // 2. Acquire per-user advisory lock + insert in one txn. No eviction —
+  //    cap enforcement is `runMonthlyCleanup`'s job (Wave 3 spec).
   await db.transaction(async (tx) => {
     // pg_advisory_xact_lock auto-releases at commit/rollback. The "library:"
     // namespace prefix keeps this lock distinct from any other per-user lock
@@ -152,39 +162,6 @@ export async function retainImagesToLibrary(
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtext(${`library:${sessionUserId}`}))`,
     );
-
-    const countRows = await tx
-      .select({ count: sql<number>`count(*)::int` })
-      .from(libraryImages)
-      .where(eq(libraryImages.userId, sessionUserId));
-    // noUncheckedIndexedAccess: count(*) always returns one row, but TS
-    // doesn't know that. Default to 0 defensively.
-    const existingCount = countRows[0]?.count ?? 0;
-
-    const overflow = existingCount + retainable.length - LIBRARY_CAP;
-
-    if (overflow > 0) {
-      const evictions = await tx
-        .select({
-          id: libraryImages.id,
-          imageUrl: libraryImages.imageUrl,
-        })
-        .from(libraryImages)
-        .where(eq(libraryImages.userId, sessionUserId))
-        .orderBy(asc(libraryImages.createdAt))
-        .limit(overflow);
-
-      for (const row of evictions) orphansToDelete.push(row.imageUrl);
-
-      if (evictions.length > 0) {
-        await tx.delete(libraryImages).where(
-          inArray(
-            libraryImages.id,
-            evictions.map((e) => e.id),
-          ),
-        );
-      }
-    }
 
     await tx.insert(libraryImages).values(
       retainable.map((r) => ({
@@ -197,10 +174,6 @@ export async function retainImagesToLibrary(
       })),
     );
   });
-
-  // 3. Blob deletes happen OUTSIDE the txn — see top-of-file rationale.
-  // safeDeleteBlob never throws; failures are logged to post_logs.
-  for (const url of orphansToDelete) await safeDeleteBlob(url);
 
   return { ok: true };
 }

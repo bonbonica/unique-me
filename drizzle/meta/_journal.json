@@ -78,6 +78,13 @@
       "when": 1781301844902,
       "tag": "0010_lethal_hercules",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1781738800809,
+      "tag": "0011_famous_zodiak",
+      "breakpoints": true
     }
   ]
 }

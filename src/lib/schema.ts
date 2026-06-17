@@ -148,6 +148,20 @@ export const profiles = pgTable(
     // own frozen-at-creation copy so Settings edits never retroactively
     // shift past batches' calendars.
     postingDays: text("posting_days"),
+    // Wave 3 image library: per-user cleanup tracking. Stores the month
+    // ("YYYY-MM" in user's browser TZ) of the last `runMonthlyCleanup`
+    // check. String equality against the client-supplied current month
+    // decides whether the cleanup logic runs this session. NULL on legacy
+    // rows reads as "never checked" → cleanup fires on first visit.
+    lastCleanupCheckMonth: text("last_cleanup_check_month"),
+    // Wave 3: user clicked "Don't show this reminder again" on the cleanup
+    // modal. Once true, monthly cleanup runs silently. One-way dismiss in
+    // Wave 3 — no Settings toggle to re-enable yet.
+    monthlyCleanupReminderDismissed: boolean(
+      "monthly_cleanup_reminder_dismissed",
+    )
+      .notNull()
+      .default(false),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()
@@ -412,12 +426,24 @@ export const libraryImages = pgTable(
     // Audit-only. No FK — see docblock above.
     originPostId: text("origin_post_id"),
     originBatchId: text("origin_batch_id"),
+    // Wave 3 image library: nullable timestamp doubles as the lock indicator
+    // (non-null = locked, set by toggleLibraryImageLock when the user clicks
+    // the padlock affordance). Locked rows are exempt from monthly cleanup.
+    lockedAt: timestamp("locked_at"),
+    // Wave 3 hook for the future Wave 4 per-post picker — set when an image
+    // is reused on a new post. Wave 3 never writes it; the monthly-cleanup
+    // sort uses COALESCE(lastUsedAt, createdAt) so once the picker ships,
+    // recently-used images naturally survive cleanup.
+    lastUsedAt: timestamp("last_used_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
     // Composite index on (userId, createdAt). Supports:
     //  - listLibrary: WHERE userId = ? ORDER BY createdAt DESC
-    //  - eviction:   WHERE userId = ? ORDER BY createdAt ASC LIMIT N
+    //  - Wave 3 monthly cleanup: WHERE userId = ? ORDER BY
+    //    COALESCE(lastUsedAt, createdAt) ASC LIMIT N — still benefits from
+    //    the userId prefix; full coverage on the COALESCE expression is a
+    //    future optimisation if cleanup becomes hot.
     index("library_images_user_created_idx").on(
       table.userId,
       table.createdAt,
