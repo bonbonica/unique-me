@@ -153,7 +153,7 @@ export default async function CreatePage() {
         <CreateHubFormSlot
           themePlaceholder={themePlaceholder}
           importantThingPlaceholder={importantThingPlaceholder}
-          plan={subscription.plan}
+          hasProFeatures={subscriptionService.hasProFeatures(subscription)}
         />
       );
     }

@@ -64,9 +64,11 @@ export default async function PostsPage({
   // server-side so the wizard can decide whether to render the corner
   // regenerate icon without a client-side subscription round-trip.
   // checkSubscription is authoritative; the client-side hide is a
-  // courtesy, the server action gates regardless.
+  // courtesy, the server action gates regardless. Active trial users get
+  // Pro-equivalent feature access — gating is via the shared
+  // hasProFeatures helper.
   const sub = await subscriptionService.checkSubscription(session.user.id);
-  const isPro = sub.plan === "pro" && sub.status === "active";
+  const isPro = subscriptionService.hasProFeatures(sub);
 
   switch (data.batch.status) {
     case "reviewing":

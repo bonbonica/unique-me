@@ -565,7 +565,8 @@ export async function retryImage(
 }
 
 /**
- * Manually replace a successful image with a new attempt. Pro + active only.
+ * Manually replace a successful image with a new attempt. Gated to users
+ * with Pro-tier feature access — active Pro or active (non-expired) trial.
  *
  * Tier gate runs BEFORE any DB write (cheap rejection for non-Pro). On
  * success the conditional UPDATE flips status to "regenerating" while
@@ -579,7 +580,7 @@ export async function regenerateImage(
   sessionUserId: string,
 ): Promise<RegenerateImageResult> {
   const sub = await subscriptionService.checkSubscription(sessionUserId);
-  if (!(sub.plan === "pro" && sub.status === "active")) {
+  if (!subscriptionService.hasProFeatures(sub)) {
     return { ok: false, reason: "pro_required" };
   }
 

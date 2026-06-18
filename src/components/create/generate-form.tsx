@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { PostLength, SubscriptionPlan } from "@/lib/schema";
+import type { PostLength } from "@/lib/schema";
 import { cn } from "@/lib/utils";
 
 /**
@@ -35,29 +35,32 @@ import { cn } from "@/lib/utils";
  * On error the form re-renders with the typed values preserved and an
  * inline banner showing the action's error copy.
  *
- * Phase 3 task-08: Pro users get a required Short/Medium/Long segmented
- * control (no default — forces an explicit choice per D7). Starter and
- * trial users don't see the picker; the form submits `postLength="medium"`
- * via a hidden input so the action and service always receive a value.
+ * Phase 3 task-08: users with Pro feature access get a required
+ * Short/Medium/Long segmented control (no default — forces an explicit
+ * choice per D7). Other users don't see the picker; the form submits
+ * `postLength="medium"` via a hidden input so the action and service always
+ * receive a value. Active trial users are treated as Pro for feature access
+ * via `hasProFeatures` resolved server-side by the page caller.
  */
 export function GenerateForm({
   themePlaceholder,
   importantThingPlaceholder,
-  plan,
+  hasProFeatures,
 }: {
   themePlaceholder: string;
   importantThingPlaceholder: string;
-  plan: SubscriptionPlan;
+  hasProFeatures: boolean;
 }) {
   const [state, formAction, pending] = useActionState<
     GenerateActionState,
     FormData
   >(generateWeeklyAction, INITIAL_GENERATE_STATE);
 
-  // Only Pro users see the picker. Mix is preselected for everyone (spec §6)
-  // so the submit button never needs a null-gate — length always has a value.
+  // Only Pro-feature users see the picker. Mix is preselected for everyone
+  // (spec §6) so the submit button never needs a null-gate — length always
+  // has a value.
   const [postLength, setPostLength] = useState<PostLength>("mix");
-  const isPro = plan === "pro";
+  const isPro = hasProFeatures;
 
   if (pending) {
     return <GeneratingState />;

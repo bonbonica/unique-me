@@ -75,6 +75,23 @@ export type SubscriptionStateSnapshot = {
 };
 
 /**
+ * Single source of truth for "does this user get Pro-tier features?" — i.e.
+ * regenerate, the post-length picker, and any future Pro-only UX. An ACTIVE
+ * trial is treated as Pro-equivalent for feature access only; an expired or
+ * inactive trial fails. Quota/billing math (canGenerate, proQuota,
+ * nextResetAt, setPlan) deliberately does NOT call this — trial keeps its
+ * lifetime-1 cap regardless of feature parity.
+ *
+ * `isActive` already encodes "trial-not-expired OR paid-active" (see
+ * {@link checkSubscription}), so an expired trial (`status === "trial"`
+ * with `trialEnd < now`) and a hard-expired trial (`status === "expired"`)
+ * both yield `false`.
+ */
+export function hasProFeatures(s: SubscriptionStateSnapshot): boolean {
+  return (s.plan === "pro" || s.status === "trial") && s.isActive;
+}
+
+/**
  * Create a free-trial subscription row for a newly-signed-up user. Called
  * from Better Auth's `databaseHooks.user.create.after` (see `auth.ts`).
  *
