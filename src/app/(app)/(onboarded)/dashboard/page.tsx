@@ -195,11 +195,19 @@ export default async function DashboardPage() {
   );
   const banner = await decideBanner(session.user.id, subscription);
   const stats = buildStats(subscription);
+  const hasAnyBatch = await postService.hasAnyBatch(session.user.id);
 
   const firstName = session.user.name?.trim().split(/\s+/)[0] ?? null;
-  const welcomeHeading = firstName
-    ? `Welcome back, ${firstName}.`
-    : "Welcome back.";
+  const welcomeHeading = hasAnyBatch
+    ? firstName
+      ? `Welcome back, ${firstName}.`
+      : "Welcome back."
+    : firstName
+      ? `Welcome, ${firstName}.`
+      : "Welcome.";
+  const welcomeSubtext = hasAnyBatch
+    ? "Pick up where you left off."
+    : "Let's create your first posts.";
 
   return (
     <div className="max-w-5xl">
@@ -214,7 +222,7 @@ export default async function DashboardPage() {
           {welcomeHeading}
         </h1>
         <p className="text-lg text-muted-foreground leading-8">
-          Pick up where you left off.
+          {welcomeSubtext}
         </p>
       </header>
 
