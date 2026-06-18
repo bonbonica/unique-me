@@ -2,7 +2,7 @@ import "server-only";
 
 import { after } from "next/server";
 import { del } from "@vercel/blob";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import pLimit from "p-limit";
 import { generateImage } from "@/lib/ai/image-generator";
 import { db } from "@/lib/db";
@@ -12,6 +12,9 @@ import {
   postImages,
   postLogs,
   posts,
+  profiles,
+  scheduledPosts,
+  weeklyBatches,
 } from "@/lib/schema";
 import { upload } from "@/lib/storage";
 import * as subscriptionService from "./subscription-service";
@@ -656,4 +659,388 @@ async function mapRegenerateFailureReason(
   }
   if (row.attempt >= 2) return "attempts_exhausted";
   return "not_successful";
+}
+
+// ============================================================================
+// Image library Wave 3 — monthly cleanup, lock toggle, bulk delete,
+// post-publish blob lifecycle, picker stub.
+//
+// Cap = LIBRARY_CAP (100). Enforced ONLY by runMonthlyCleanup, which fires
+// on the user's first app open of a new calendar month (string compare on
+// `profiles.last_cleanup_check_month`). Locked + in-use rows are exempt.
+// ============================================================================
+
+/**
+ * Batch statuses that mean a library image is still "in use" — its
+ * `originPostId` resolves to a post in one of these batches and so should
+ * NOT be cleaned up. Sourced from BatchStatus in schema.ts. `"completed"`
+ * and `"in_progress"` are deliberately excluded: a completed batch has
+ * already posted (and the post-publish hook may have cleared the
+ * `post_images` reference); `"in_progress"` is unreachable in current code.
+ */
+const ACTIVE_BATCH_STATUSES = [
+  "reviewing",
+  "scheduling",
+  "scheduled",
+  "cancelled",
+] as const;
+
+export type CleanupResult =
+  | { ok: true; action: "none" | "ran"; deleted: number; over: number }
+  | { ok: false; error: "unauthenticated" };
+
+export type InspectCleanupResult = {
+  cleanupNeeded: boolean;
+  shouldShowReminder: boolean;
+  count: number;
+  over: number;
+};
+
+export type PickFromLibraryResult =
+  | { ok: true }
+  | { ok: false; error: "not_implemented" };
+
+/**
+ * Pure read — returns the state the onboarded layout needs to decide
+ * "show modal", "run silently", or "nothing to do". Does NOT mutate
+ * `lastCleanupCheckMonth`; only `runMonthlyCleanup` does that.
+ *
+ * Resolution:
+ *  - Already checked this month → `cleanupNeeded: false`.
+ *  - Over cap, reminder dismissed → `cleanupNeeded: true, shouldShowReminder: false`.
+ *  - Over cap, reminder not dismissed → both true.
+ *  - Under or at cap → `cleanupNeeded: false`.
+ */
+export async function inspectMonthlyCleanupState(
+  sessionUserId: string,
+  currentMonthYyyyMm: string,
+): Promise<InspectCleanupResult> {
+  const profileRows = await db
+    .select({
+      lastCleanupCheckMonth: profiles.lastCleanupCheckMonth,
+      dismissed: profiles.monthlyCleanupReminderDismissed,
+    })
+    .from(profiles)
+    .where(eq(profiles.userId, sessionUserId))
+    .limit(1);
+
+  const profile = profileRows[0];
+  // No profile = unboarded path; nothing to clean.
+  if (!profile) {
+    return { cleanupNeeded: false, shouldShowReminder: false, count: 0, over: 0 };
+  }
+
+  if (profile.lastCleanupCheckMonth === currentMonthYyyyMm) {
+    return { cleanupNeeded: false, shouldShowReminder: false, count: 0, over: 0 };
+  }
+
+  const countRows = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(libraryImages)
+    .where(eq(libraryImages.userId, sessionUserId));
+  const count = countRows[0]?.count ?? 0;
+  const over = Math.max(0, count - LIBRARY_CAP);
+
+  const cleanupNeeded = over > 0;
+  const shouldShowReminder = cleanupNeeded && !profile.dismissed;
+
+  return { cleanupNeeded, shouldShowReminder, count, over };
+}
+
+/**
+ * One-way dismiss of the cleanup reminder. After this call, future
+ * `inspectMonthlyCleanupState` results have `shouldShowReminder: false` and
+ * the onboarded layout runs cleanup silently. Wave 3 has no Settings toggle
+ * to re-enable; that's future work.
+ */
+export async function markCleanupReminderDismissed(
+  sessionUserId: string,
+): Promise<void> {
+  await db
+    .update(profiles)
+    .set({ monthlyCleanupReminderDismissed: true })
+    .where(eq(profiles.userId, sessionUserId));
+}
+
+/**
+ * Wave 3 monthly cleanup. Idempotent within a calendar month — second call
+ * the same month is a no-op via `lastCleanupCheckMonth` string equality.
+ *
+ * Algorithm:
+ *  1. Already checked this month → return `{action: "none"}`.
+ *  2. Under cap → set `lastCleanupCheckMonth` and return `{action: "none"}`.
+ *  3. Over cap → SELECT unlocked + unused rows oldest first by
+ *     `COALESCE(lastUsedAt, createdAt)`, delete up to `over` of them. For
+ *     each: `safeDeleteBlob` (best-effort, never throws) then DB DELETE.
+ *  4. Update `lastCleanupCheckMonth` even if 0 rows were actually deletable
+ *     (all over-cap rows could be locked or in-use). User can manually
+ *     unlock and revisit next month.
+ *
+ * "In use" is defined as: the row's `originPostId` resolves to a `posts`
+ * row whose batch is in {@link ACTIVE_BATCH_STATUSES}. Library rows whose
+ * origin post no longer exists (deleted) are NOT in use → eligible. The
+ * spec is conservative on purpose; once Wave 4's picker ships and writes
+ * `lastUsedAt`, recently-reused images naturally survive cleanup via the
+ * COALESCE sort.
+ *
+ * Never throws. Returns the actual deleted count and the original overage
+ * so the UI can render a sensible toast ("Removed N of M unlocked images").
+ */
+export async function runMonthlyCleanup(
+  sessionUserId: string,
+  currentMonthYyyyMm: string,
+): Promise<CleanupResult> {
+  try {
+    const profileRows = await db
+      .select({ lastCleanupCheckMonth: profiles.lastCleanupCheckMonth })
+      .from(profiles)
+      .where(eq(profiles.userId, sessionUserId))
+      .limit(1);
+    const profile = profileRows[0];
+    if (!profile) {
+      return { ok: true, action: "none", deleted: 0, over: 0 };
+    }
+    if (profile.lastCleanupCheckMonth === currentMonthYyyyMm) {
+      return { ok: true, action: "none", deleted: 0, over: 0 };
+    }
+
+    const countRows = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(libraryImages)
+      .where(eq(libraryImages.userId, sessionUserId));
+    const count = countRows[0]?.count ?? 0;
+    const over = Math.max(0, count - LIBRARY_CAP);
+
+    if (over === 0) {
+      await db
+        .update(profiles)
+        .set({ lastCleanupCheckMonth: currentMonthYyyyMm })
+        .where(eq(profiles.userId, sessionUserId));
+      return { ok: true, action: "none", deleted: 0, over: 0 };
+    }
+
+    // Collect every postId currently in an active batch for this user.
+    // Library rows whose originPostId is in this set are "in use".
+    // Read-once + JS filter is simpler than a Drizzle NOT EXISTS subquery
+    // and fast enough at typical library sizes (~100 rows, few active batches).
+    const activePostIds = await db
+      .selectDistinct({ id: posts.id })
+      .from(posts)
+      .innerJoin(weeklyBatches, eq(posts.batchId, weeklyBatches.id))
+      .where(
+        and(
+          eq(weeklyBatches.userId, sessionUserId),
+          inArray(
+            weeklyBatches.status,
+            ACTIVE_BATCH_STATUSES as unknown as string[],
+          ),
+        ),
+      );
+    const inUseSet = new Set(activePostIds.map((r) => r.id));
+
+    const candidates = await db
+      .select({
+        id: libraryImages.id,
+        imageUrl: libraryImages.imageUrl,
+        originPostId: libraryImages.originPostId,
+      })
+      .from(libraryImages)
+      .where(
+        and(
+          eq(libraryImages.userId, sessionUserId),
+          isNull(libraryImages.lockedAt),
+        ),
+      )
+      .orderBy(
+        asc(
+          sql`COALESCE(${libraryImages.lastUsedAt}, ${libraryImages.createdAt})`,
+        ),
+      );
+
+    const eligible = candidates.filter(
+      (r) => !r.originPostId || !inUseSet.has(r.originPostId),
+    );
+    const toDelete = eligible.slice(0, over);
+
+    let deleted = 0;
+    for (const row of toDelete) {
+      await safeDeleteBlob(row.imageUrl);
+      const result = await db
+        .delete(libraryImages)
+        .where(
+          and(
+            eq(libraryImages.id, row.id),
+            eq(libraryImages.userId, sessionUserId),
+          ),
+        )
+        .returning({ id: libraryImages.id });
+      deleted += result.length;
+    }
+
+    await db
+      .update(profiles)
+      .set({ lastCleanupCheckMonth: currentMonthYyyyMm })
+      .where(eq(profiles.userId, sessionUserId));
+
+    return { ok: true, action: "ran", deleted, over };
+  } catch (err) {
+    console.error("[image-service] runMonthlyCleanup top-level failed", {
+      sessionUserId,
+      currentMonthYyyyMm,
+      err,
+    });
+    // Return a benign "none" — UI shows no toast, user can retry next visit.
+    return { ok: true, action: "none", deleted: 0, over: 0 };
+  }
+}
+
+/**
+ * Toggle the padlock on a single library image. `lock=true` sets `lockedAt`
+ * to now (protected from cleanup); `lock=false` clears it. Ownership-gated
+ * via the WHERE clause — wrong owner returns `not_found` (same as missing
+ * row, so existence isn't leaked).
+ */
+export async function toggleLibraryImageLock(
+  sessionUserId: string,
+  libraryImageId: string,
+  lock: boolean,
+): Promise<ImageServiceResult> {
+  const updated = await db
+    .update(libraryImages)
+    .set({ lockedAt: lock ? new Date() : null })
+    .where(
+      and(
+        eq(libraryImages.id, libraryImageId),
+        eq(libraryImages.userId, sessionUserId),
+      ),
+    )
+    .returning({ id: libraryImages.id });
+
+  if (updated.length === 0) return { ok: false, error: "not_found" };
+  return { ok: true };
+}
+
+/**
+ * Bulk-delete library images for this user.
+ *  - `"unlocked-only"`: deletes only rows where `lockedAt IS NULL`. Used by
+ *    the "Delete all" button (respects locks).
+ *  - `"all"`: ignores lock state. Used by the post-download popup option
+ *    "Delete all images (incl. locked)" — explicit destructive choice.
+ *
+ * Same blob-then-row ordering as `deleteLibraryImage`: read URLs, fire
+ * `safeDeleteBlob` per row (best-effort), then DELETE the rows. Sequential
+ * blob deletes mirror the existing pattern — fine at typical library sizes;
+ * future work can parallelise if needed.
+ */
+export async function deleteAllLibraryImages(
+  sessionUserId: string,
+  mode: "unlocked-only" | "all",
+): Promise<{ ok: true; deleted: number }> {
+  const where =
+    mode === "unlocked-only"
+      ? and(
+          eq(libraryImages.userId, sessionUserId),
+          isNull(libraryImages.lockedAt),
+        )
+      : eq(libraryImages.userId, sessionUserId);
+
+  const rows = await db
+    .select({ id: libraryImages.id, imageUrl: libraryImages.imageUrl })
+    .from(libraryImages)
+    .where(where);
+
+  if (rows.length === 0) return { ok: true, deleted: 0 };
+
+  for (const row of rows) await safeDeleteBlob(row.imageUrl);
+
+  await db.delete(libraryImages).where(
+    inArray(
+      libraryImages.id,
+      rows.map((r) => r.id),
+    ),
+  );
+
+  return { ok: true, deleted: rows.length };
+}
+
+/**
+ * Contract for the future posting service. Called after each
+ * `scheduledPosts.status` transition to `"posted"`. If EVERY platform for
+ * this post has posted, the image blob is reclaimed and the post_images
+ * pointer is cleared.
+ *
+ * Source-aware blob disposal:
+ *  - `"ai"` / `"uploaded"`: the blob belongs to this post alone → delete.
+ *  - `"library"`: the blob is owned by `library_images` → do NOT delete;
+ *    only clear the post_images pointer.
+ *
+ * Never throws. Wave 3 ships the function; no caller exists in current
+ * code (posting cron is Phase 4+). When the posting service is built it
+ * calls this after marking each scheduledPost row as `"posted"`.
+ */
+export async function deleteImageIfAllPlatformsPosted(
+  postId: string,
+): Promise<void> {
+  try {
+    const schedRows = await db
+      .select({ status: scheduledPosts.status })
+      .from(scheduledPosts)
+      .where(eq(scheduledPosts.postId, postId));
+
+    if (schedRows.length === 0) return;
+    if (schedRows.some((r) => r.status !== "posted")) return;
+
+    const imgRows = await db
+      .select({
+        id: postImages.id,
+        imageUrl: postImages.imageUrl,
+        source: postImages.source,
+        publishedAt: postImages.publishedAt,
+      })
+      .from(postImages)
+      .where(eq(postImages.postId, postId))
+      .limit(1);
+
+    const img = imgRows[0];
+    if (!img) return;
+    if (img.imageUrl === null || img.publishedAt !== null) return;
+
+    if (img.source === "ai" || img.source === "uploaded") {
+      await safeDeleteBlob(img.imageUrl);
+    }
+    // source === "library": library_images still owns the blob, leave it.
+
+    await db
+      .update(postImages)
+      .set({ imageUrl: null, publishedAt: new Date() })
+      .where(eq(postImages.id, img.id));
+  } catch (err) {
+    console.error("[image-service] deleteImageIfAllPlatformsPosted failed", {
+      postId,
+      err,
+    });
+  }
+}
+
+/**
+ * Wave 4 picker stub. Future implementation will:
+ *   - Copy `library_images.imageUrl` + `imagePrompt` into the target
+ *     `post_images` row.
+ *   - Set `post_images.source = "library"`.
+ *   - UPDATE `library_images.lastUsedAt = now()` so the cleanup sort
+ *     protects recently-reused images.
+ *
+ * Wave 3 ships the signature only — gives the future picker UI a stable
+ * import surface to land against without coordinating a service-layer
+ * change in the same wave.
+ */
+export async function pickFromLibrary(
+  libraryImageId: string,
+  postImageId: string,
+  sessionUserId: string,
+): Promise<PickFromLibraryResult> {
+  void libraryImageId;
+  void postImageId;
+  void sessionUserId;
+  return { ok: false, error: "not_implemented" };
 }
