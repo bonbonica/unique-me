@@ -33,6 +33,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@vercel/blob": "^2.3.3",
     "ai": "^5.0.188",
+    "archiver": "^8.0.0",
     "better-auth": "^1.6.11",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -54,6 +55,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.4.6",
     "@tailwindcss/postcss": "latest",
+    "@types/archiver": "^8.0.0",
     "@types/node": "^20.19.41",
     "@types/pg": "^8.20.0",
     "@types/react": "19.2.5",
