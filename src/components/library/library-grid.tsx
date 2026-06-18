@@ -30,8 +30,11 @@ type Props = {
  * Tile anatomy:
  *  - `aspect-square overflow-hidden rounded-2xl` per DESIGN.md §6.
  *  - Hover-lift via DESIGN.md §11 `card-interactive` pattern.
- *  - Padlock affordance (top-left): solid `bg-primary/15 border-primary/30`
- *    pill when locked, ghost `text-muted-foreground/70` icon when unlocked.
+ *  - Padlock affordance (top-left): both states render as bordered pills.
+ *    Locked → `bg-primary border-primary text-primary-foreground` (solid
+ *    champagne pill with a dark midnight icon — high contrast, signals
+ *    "protected"). Unlocked → `bg-muted border-border text-foreground`
+ *    (neutral muted pill with ivory icon, clearly visible at rest).
  *  - Last-used / Added timestamp badge (bottom-left).
  *  - Hover/focus-within delete overlay (bottom).
  */
@@ -96,10 +99,10 @@ export function LibraryGrid({ images }: Props) {
                 type="button"
                 onClick={() => handleToggleLock(img)}
                 className={cn(
-                  "absolute top-3 left-3 inline-flex items-center justify-center rounded-md p-1.5 transition-colors",
+                  "absolute top-3 left-3 inline-flex items-center justify-center rounded-md border p-1.5 transition-colors",
                   locked
-                    ? "bg-primary/15 border border-primary/30 text-primary"
-                    : "text-muted-foreground/70 hover:text-foreground",
+                    ? "bg-primary border-primary text-primary-foreground"
+                    : "bg-muted border-border text-foreground",
                 )}
                 aria-label={locked ? "Unlock image" : "Lock image"}
                 aria-pressed={locked}
