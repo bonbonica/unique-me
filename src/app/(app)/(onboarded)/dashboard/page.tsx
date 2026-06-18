@@ -128,17 +128,6 @@ async function decideBanner(
   return null;
 }
 
-/**
- * Plan-name label used inside helper strings on the dashboard. Mirrors the
- * mapping in {@link DashboardTopBar} but lowercased to read naturally inside
- * a sentence ("On the starter plan." vs "On the Starter plan.").
- */
-const PLAN_LABELS_LOWER: Record<SubscriptionStateSnapshot["plan"], string> = {
-  free_trial: "free trial",
-  starter: "starter",
-  pro: "pro",
-};
-
 type Stat = {
   label: string;
   value: string;
@@ -149,18 +138,13 @@ type Stat = {
  * Build the three placeholder stat cards from subscription state. Real
  * batch + connected-account counts arrive in later phases — until then
  * "Posts scheduled this week" and "Connected accounts" are hard-coded to 0.
+ *
+ * `postsCreated` is the lifetime user-facing post count from
+ * {@link postService.countTotalPostsCreated} — 7 or 9 per batch, not per
+ * network variation. Pass 0 if no batches exist; the helper copy branches
+ * on that.
  */
-function buildStats(subscription: SubscriptionStateSnapshot): readonly Stat[] {
-  const daysLeftValue =
-    subscription.daysLeftInTrial !== null
-      ? String(subscription.daysLeftInTrial)
-      : "—";
-
-  const trialHelper =
-    subscription.status === "trial"
-      ? "Your free week is on the house."
-      : `On the ${PLAN_LABELS_LOWER[subscription.plan]} plan.`;
-
+function buildStats(postsCreated: number): readonly Stat[] {
   return [
     {
       label: "Posts scheduled this week",
@@ -168,9 +152,12 @@ function buildStats(subscription: SubscriptionStateSnapshot): readonly Stat[] {
       helper: "Nothing scheduled yet.",
     },
     {
-      label: "Days left in trial",
-      value: daysLeftValue,
-      helper: trialHelper,
+      label: "Posts created",
+      value: String(postsCreated),
+      helper:
+        postsCreated === 0
+          ? "Nothing yet — let's change that."
+          : "Across all your batches.",
     },
     {
       label: "Connected accounts",
@@ -194,8 +181,11 @@ export default async function DashboardPage() {
     session.user.id,
   );
   const banner = await decideBanner(session.user.id, subscription);
-  const stats = buildStats(subscription);
-  const hasAnyBatch = await postService.hasAnyBatch(session.user.id);
+  const [postsCreated, hasAnyBatch] = await Promise.all([
+    postService.countTotalPostsCreated(session.user.id),
+    postService.hasAnyBatch(session.user.id),
+  ]);
+  const stats = buildStats(postsCreated);
 
   const firstName = session.user.name?.trim().split(/\s+/)[0] ?? null;
   const welcomeHeading = hasAnyBatch

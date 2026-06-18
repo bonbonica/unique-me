@@ -287,6 +287,35 @@ export async function hasAnyBatch(userId: string): Promise<boolean> {
 }
 
 /**
+ * Total number of user-facing posts the user has ever generated, summed
+ * across every live batch they own. "User-facing" = the `weeklyBatches.totalPosts`
+ * count (7 or 9 per batch, already filtered by `postingDays` at creation
+ * time) — NOT the per-network FB/IG/LI variations, which would 3× the count.
+ *
+ * Soft-deleted batches are excluded (`deletedAt IS NULL`) so the number stays
+ * consistent with every other user-facing read in this service and with the
+ * quota-soft-delete contract (tombstones never reappear in the UI).
+ *
+ * All non-terminal statuses count, including `cancelled` — those posts were
+ * still created by the user, even if their schedule was later stopped.
+ * Returns 0 for a user with no batches.
+ */
+export async function countTotalPostsCreated(userId: string): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<number>`coalesce(sum(${weeklyBatches.totalPosts}), 0)::int`,
+    })
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        isNull(weeklyBatches.deletedAt)
+      )
+    );
+  return row?.total ?? 0;
+}
+
+/**
  * Most recent batch in `reviewing` or `scheduling` status. Narrow contract
  * preserved for callers that explicitly want the "still being generated /
  * reviewed / locked-but-not-yet-scheduled" window — i.e. the in-flight
