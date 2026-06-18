@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { DashboardMobileNav } from "@/components/dashboard/mobile-nav";
 import { DashboardSidebar } from "@/components/dashboard/sidebar";
 import { DashboardTopBar } from "@/components/dashboard/top-bar";
+import { MonthlyCleanupGate } from "@/components/library/monthly-cleanup-gate";
 import { auth } from "@/lib/auth";
 import {
   postService,
@@ -90,6 +91,11 @@ export default async function OnboardedLayout({
           {children}
         </div>
       </div>
+      {/* Wave 3 Stage 4: first-of-month image library cleanup gate. Fires
+          AT MOST ONCE per session (sessionStorage flag), renders nothing
+          when no action is needed, or surfaces the reminder modal / runs
+          silent cleanup as appropriate. */}
+      <MonthlyCleanupGate />
     </div>
   );
 }
