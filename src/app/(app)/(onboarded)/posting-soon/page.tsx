@@ -1,53 +1,57 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { ScheduledPageClient } from "@/components/schedule/scheduled-page-client";
+import { PostingSoonTabs } from "@/components/posting-soon/posting-soon-tabs";
 import { auth } from "@/lib/auth";
-import { postService, subscriptionService } from "@/lib/services";
+import type { SelectionPlatform } from "@/lib/schema";
+import { postService, profileService } from "@/lib/services";
 
 /**
- * Scheduled hub (Stage-1 redesign). Server component — owns auth + data
- * fetching. Renders the page header and hands the `ScheduledView` to a
- * client wrapper that manages the cancel-dialog state.
+ * `/posting-soon` — network-tabs rebuild. Replaces the previous rolling-4
+ * batch-grid view with a per-platform list of every scheduled post for
+ * the user, ordered by scheduled date ascending.
  *
- * Two parallel reads:
- *   - `getScheduledViewForUser` returns the rolling-4 grid data.
- *   - `checkSubscription` returns the period-cap snapshot whose
- *     `proQuota.used` count drives the `<CreateNextBatchCta />` label. That
- *     count is the same one `canGenerate` evaluates against the 4-per-period
- *     cap (D-A16) — cancelled batches are included, so the CTA can never
- *     promise a slot the server cap won't honour.
+ * Tabs are driven by `profile.platforms` (the user's onboarding
+ * selection). A platform shows up here even when it has zero scheduled
+ * posts — the empty-state copy lives inside the tab panel rather than
+ * suppressing the tab.
+ *
+ * Reader source — PRESENT-DAY (mirrors `<BatchDetailView />`'s choice):
+ * reads `post_selections` rather than `scheduled_posts` because no writer
+ * populates the latter today. See
+ * {@link postService.getAllScheduledPostsForUser} for the swap-back
+ * criteria.
  *
  * Layout follows DESIGN.md §8 pattern B (editorial content): `max-w-3xl`,
- * generous `space-y-12` between sections. The top quota pill + sidebar are
- * provided by the `(onboarded)` layout and are not duplicated here.
+ * generous `space-y-8`.
  */
-export default async function SchedulePage() {
+export default async function PostingSoonPage() {
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) redirect("/login");
 
-  const [view, subscription] = await Promise.all([
-    postService.getScheduledViewForUser(session.user.id),
-    subscriptionService.checkSubscription(session.user.id),
+  const [profile, postsByPlatform] = await Promise.all([
+    profileService.getProfile(session.user.id),
+    postService.getAllScheduledPostsForUser(session.user.id),
   ]);
 
-  // Pro plan: feed the true period count into the CTA. Trial / Starter
-  // ignore the CTA's /4 semantic; default to 0 so the prop type stays plain
-  // `number` and the CTA's `atCap` check (>= 4) never trips spuriously for
-  // those plans.
-  const proBatchesUsed =
-    subscription.plan === "pro" && subscription.proQuota !== null
-      ? subscription.proQuota.used
-      : 0;
+  // Cast: `profile.platforms` is `string[]` per Drizzle's inferred type
+  // because the column is `text[]`. The onboarding form's Zod schema
+  // constrains the values to the SelectionPlatform union, so the cast is
+  // safe under normal operation. Mirrors the same cast in
+  // `getBatchForReview`.
+  const platforms = (profile?.platforms ?? []) as SelectionPlatform[];
 
   return (
-    <div className="max-w-3xl mx-auto space-y-12">
+    <div className="max-w-3xl mx-auto space-y-8">
       <header>
         <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-          Scheduled
+          Posting Soon
         </h1>
       </header>
 
-      <ScheduledPageClient view={view} proBatchesUsed={proBatchesUsed} />
+      <PostingSoonTabs
+        platforms={platforms}
+        postsByPlatform={postsByPlatform}
+      />
     </div>
   );
 }

@@ -1975,19 +1975,241 @@ export async function restorePost(
 }
 
 // =============================================================================
-// RESERVED — deletePost (D-S2-22, future spec).
-//
-// `postService.deletePost(sessionUserId, postId)` is the reserved-future
-// destructive per-post action. NOT implemented in Stage-2. When built, it will:
-//   1. Call imageService.retainImagesToLibrary(...) to move the image to the
-//      Library (same retain-then-delete pattern as deleteBatchForever).
-//   2. DELETE FROM posts WHERE id = postId AND userId = sessionUserId — cascade
-//      fires.
-// It is the path that will later trigger AI per-network regeneration.
-//
-// Reserved here so no destructive cancel path slips in under another name.
-// See specs/scheduled-and-create-redesign-stage-2/spec.md D-S2-22 + §8.
+// Posting Soon (tabs rebuild) — per-network scheduled-posts reader + per-post
+// unschedule / delete service functions.
 // =============================================================================
+
+/**
+ * Per-network row shape consumed by the `/posting-soon` tabs view.
+ */
+export type ScheduledPostRowData = {
+  postId: string;
+  batchId: string;
+  platform: SelectionPlatform;
+  text: string;
+  imageUrl: string | null;
+  scheduledTime: Date;
+};
+
+/**
+ * Load every scheduled (postId, platform) row for the user, grouped by
+ * platform. Powers the `/posting-soon` tabs view.
+ *
+ * **Reader source — PRESENT-DAY** (mirrors `<BatchDetailView />`'s choice in
+ * batch-detail-view.tsx §5.3): reads `post_selections` rather than
+ * `scheduled_posts` because no writer populates `scheduled_posts` today
+ * (Phase 7 cron deferred). Filtered to batches whose status is `"scheduling"`
+ * so cancelled / completed / still-reviewing batches don't leak into the
+ * list. Tombstones (`weekly_batches.deleted_at IS NOT NULL`) are excluded.
+ *
+ * `scheduledTime` is derived from `batch.createdAt + (postOrder - 1) days`
+ * — the same proxy the batch detail page uses. When Phase 7's writer ships,
+ * swap to `scheduled_posts.scheduled_time` for the true per-post time.
+ *
+ * Each row's `text` is the per-platform text: `posts.postText` (canonical
+ * Facebook) for FB, `post_variations.adaptedText` for IG / LI. Falls back
+ * to `posts.postText` when the variation row is missing (Starter users
+ * who don't get variations).
+ *
+ * Rows are ordered by `scheduledTime` ascending across all batches so the
+ * tab list reads in publish order.
+ */
+export async function getAllScheduledPostsForUser(
+  userId: string
+): Promise<Record<SelectionPlatform, ScheduledPostRowData[]>> {
+  const rows = await db
+    .select({
+      postId: posts.id,
+      batchId: posts.batchId,
+      postOrder: posts.postOrder,
+      postText: posts.postText,
+      batchCreatedAt: weeklyBatches.createdAt,
+      platform: postSelections.platform,
+      variationText: postVariations.postText,
+      imageUrl: postImages.imageUrl,
+    })
+    .from(postSelections)
+    .innerJoin(posts, eq(posts.id, postSelections.postId))
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .leftJoin(
+      postVariations,
+      and(
+        eq(postVariations.postId, posts.id),
+        eq(postVariations.platform, postSelections.platform)
+      )
+    )
+    .leftJoin(postImages, eq(postImages.postId, posts.id))
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        eq(weeklyBatches.status, "scheduling"),
+        isNull(weeklyBatches.deletedAt)
+      )
+    );
+
+  const out: Record<SelectionPlatform, ScheduledPostRowData[]> = {
+    facebook: [],
+    instagram: [],
+    linkedin: [],
+  };
+
+  for (const r of rows) {
+    const platform = r.platform as SelectionPlatform;
+    if (!(platform in out)) continue;
+    const scheduledTime = new Date(r.batchCreatedAt);
+    scheduledTime.setDate(scheduledTime.getDate() + (r.postOrder - 1));
+    // Facebook always reads the canonical post text; IG / LI prefer their
+    // variation but fall back to the canonical when no variation row exists
+    // (Starter plan, or pre-variations legacy batches).
+    const text =
+      platform === "facebook"
+        ? r.postText
+        : r.variationText ?? r.postText;
+    out[platform].push({
+      postId: r.postId,
+      batchId: r.batchId,
+      platform,
+      text,
+      imageUrl: r.imageUrl,
+      scheduledTime,
+    });
+  }
+
+  // Stable ascending order by scheduled date across all batches.
+  for (const platform of Object.keys(out) as SelectionPlatform[]) {
+    out[platform].sort(
+      (a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime()
+    );
+  }
+
+  return out;
+}
+
+/**
+ * Per-network unschedule from `/posting-soon`. Deletes the
+ * `post_selections` row for (postId, platform) so the post stops appearing
+ * in that network's tab. The post itself stays in the batch — other
+ * networks' selections (if any) are untouched.
+ *
+ * Unlike `deselectForNetwork`, this function does NOT call
+ * `loadPostForSelectionMutation` because that guard restricts mutation to
+ * batches in `reviewing` or `cancelled` status. Posts on `/posting-soon`
+ * are by definition in `scheduling` batches — so we run our own
+ * lightweight ownership check via the `posts.userId` join and skip the
+ * status gate entirely.
+ */
+export async function unschedulePostForNetwork(
+  postId: string,
+  platform: SelectionPlatform,
+  sessionUserId: string
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "db_failed" }
+> {
+  const [row] = await db
+    .select({ userId: posts.userId, batchDeletedAt: weeklyBatches.deletedAt })
+    .from(posts)
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!row || row.batchDeletedAt !== null) {
+    return { ok: false, error: "not_found" };
+  }
+  if (row.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  try {
+    await db
+      .delete(postSelections)
+      .where(
+        and(
+          eq(postSelections.postId, postId),
+          eq(postSelections.platform, platform)
+        )
+      );
+    return { ok: true };
+  } catch (err) {
+    console.error("[postService.unschedulePostForNetwork]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+/**
+ * Per-post hard delete with image preservation (implements the previously
+ * RESERVED D-S2-22 contract). Used by the `/posting-soon` per-row Delete
+ * button.
+ *
+ * Step order mirrors {@link deleteBatchForever}, applied at the post level:
+ *   1. Ownership lookup against `posts.userId`. Status is NOT gated —
+ *      deletion is allowed regardless of batch status because the action
+ *      is destructive by intent (matches "delete forever" semantics).
+ *   2. `imageService.retainImagesToLibrary([postId])` moves the post's
+ *      image blob into the user's library before we drop the parent row.
+ *   3. Transaction: explicit bottom-up child-row deletes (scheduled_posts
+ *      → post_selections → post_variations → post_images) then the parent
+ *      `posts` row. The image-blob row's removal in step 3 is a dead
+ *      reference because the blob is now owned by `library_images`.
+ *
+ * Returns `{ ok: false, error: "not_found" }` for both genuine not-found
+ * and tombstoned-batch cases — caller doesn't need to distinguish.
+ */
+export async function deletePost(
+  postId: string,
+  sessionUserId: string
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "db_failed" }
+> {
+  const [row] = await db
+    .select({ userId: posts.userId, batchDeletedAt: weeklyBatches.deletedAt })
+    .from(posts)
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!row || row.batchDeletedAt !== null) {
+    return { ok: false, error: "not_found" };
+  }
+  if (row.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // Preserve the image to the user's library before deleting the post.
+  // `retainImagesToLibrary` short-circuits when no successful image exists
+  // for the post — safe to call unconditionally.
+  const retain = await imageService.retainImagesToLibrary(sessionUserId, [
+    postId,
+  ]);
+  if (!retain.ok) {
+    return { ok: false, error: retain.error };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // Bottom-up child deletes — foreign keys release cleanly working
+      // from leaves toward the parent.
+      await tx
+        .delete(scheduledPosts)
+        .where(eq(scheduledPosts.postId, postId));
+      await tx
+        .delete(postSelections)
+        .where(eq(postSelections.postId, postId));
+      await tx
+        .delete(postVariations)
+        .where(eq(postVariations.postId, postId));
+      await tx.delete(postImages).where(eq(postImages.postId, postId));
+      await tx
+        .delete(posts)
+        .where(and(eq(posts.id, postId), eq(posts.userId, sessionUserId)));
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error("[postService.deletePost]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
 
 // =============================================================================
 // deleteBatchForever — hard-delete a cancelled batch with image preservation

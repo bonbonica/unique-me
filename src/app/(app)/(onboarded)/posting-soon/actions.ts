@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import type { SelectionPlatform } from "@/lib/schema";
 import { postService } from "@/lib/services";
 
 /**
@@ -41,13 +42,9 @@ export async function cancelBatchAction(
 
 /**
  * Reopen a `scheduling` batch back to `reviewing` so the user can edit
- * their selections without losing the work they already committed. Backs
- * the "Edit selections" affordance on `/posting-soon/[batchId]` — see
- * `postService.reopenForEditing` for the underlying transition contract.
- *
- * Returns the same `{ ok }` shape `cancelBatchAction` uses so the client
- * trigger can render a single toast on failure. On success the client
- * routes to `/schedule-posts/[batchId]` where the wizard takes over.
+ * their selections without losing the work they already committed. Kept
+ * after the `/posting-soon` tabs rebuild (no UI surface points here today)
+ * so the backend `reopenForEditing` contract stays callable.
  */
 export async function reopenBatchAction(
   batchId: string,
@@ -68,8 +65,68 @@ export async function reopenBatchAction(
   }
 
   revalidatePath("/posting-soon");
-  revalidatePath(`/posting-soon/${batchId}`);
   revalidatePath("/schedule-posts");
   revalidatePath(`/schedule-posts/${batchId}`);
+  return { ok: true };
+}
+
+/**
+ * Per-network unschedule from the `/posting-soon` tabs view. Deletes the
+ * `post_selections` row for (postId, platform) so the row stops appearing
+ * in that network's tab. The post itself stays in the batch — other
+ * networks' selections (if any) are untouched.
+ */
+export async function unschedulePostAction(
+  postId: string,
+  platform: SelectionPlatform,
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "failed" }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
+  const result = await postService.unschedulePostForNetwork(
+    postId,
+    platform,
+    session.user.id,
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error === "db_failed" ? "failed" : result.error,
+    };
+  }
+
+  revalidatePath("/posting-soon");
+  return { ok: true };
+}
+
+/**
+ * Per-post hard delete from the `/posting-soon` tabs view. Moves the
+ * post's image to the user's library, then deletes the post (cascade
+ * fires across scheduled_posts → post_selections → post_variations →
+ * post_images). Revalidates `/library` so the freshly-retained image
+ * appears immediately.
+ */
+export async function deletePostAction(
+  postId: string,
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "failed" }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
+  const result = await postService.deletePost(postId, session.user.id);
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error === "db_failed" ? "failed" : result.error,
+    };
+  }
+
+  revalidatePath("/posting-soon");
+  revalidatePath("/library");
   return { ok: true };
 }
