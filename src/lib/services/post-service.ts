@@ -1520,6 +1520,14 @@ export async function reschedule(
  * the spec § 8.2.B).
  *
  * Status-guarded UPDATE is race-safe in the same way as `scheduleMyPick`.
+ *
+ * Navigation-redesign task-06: this action also cascades the cancel onto
+ * every still-`'pending'` child `scheduled_posts` row in the same
+ * transaction. That unification is what lets the single-list
+ * `/cancelled-posts` view (Wave 4 task-11) surface batch-cancelled posts
+ * via the same `status = 'cancelled'` filter it uses for per-post cancels —
+ * no UNION over parent status required. Already-`'posted'` / `'failed'`
+ * rows are terminal and stay untouched.
  */
 export async function stopBatch(
   batchId: string,
@@ -1543,18 +1551,56 @@ export async function stopBatch(
   }
 
   try {
-    const updateResult = await db
-      .update(weeklyBatches)
-      .set({ status: "cancelled" })
-      .where(
-        and(
-          eq(weeklyBatches.id, batchId),
-          eq(weeklyBatches.status, "scheduling")
-        )
-      )
-      .returning({ id: weeklyBatches.id });
+    // Pre-fetch the batch's post IDs for the bulk update against
+    // scheduled_posts. Done outside the transaction (read-only) so the
+    // transaction itself stays tight; reusing the IDs keeps us on the
+    // same `inArray(scheduledPosts.postId, postIds)` pattern used by
+    // `deleteBatchForever` (post-service.ts:~1942) for consistency.
+    const postRows = await db
+      .select({ id: posts.id })
+      .from(posts)
+      .where(eq(posts.batchId, batchId));
+    const postIds = postRows.map((r) => r.id);
 
-    if (updateResult.length === 0) {
+    const wasUpdated = await db.transaction(async (tx) => {
+      const updateResult = await tx
+        .update(weeklyBatches)
+        .set({ status: "cancelled" })
+        .where(
+          and(
+            eq(weeklyBatches.id, batchId),
+            eq(weeklyBatches.status, "scheduling")
+          )
+        )
+        .returning({ id: weeklyBatches.id });
+
+      if (updateResult.length === 0) {
+        // Race: a sibling tab already flipped the status between our
+        // pre-flight read and this UPDATE. The 0-row match is a no-op,
+        // so there's nothing to roll back. Skip the cascade and surface
+        // the right error code outside the transaction.
+        return false;
+      }
+
+      // task-06: cascade cancel onto every pending child scheduled_posts
+      // row. inArray with an empty array is undefined behaviour in some
+      // drizzle versions, so guard the empty case.
+      if (postIds.length > 0) {
+        await tx
+          .update(scheduledPosts)
+          .set({ status: "cancelled" })
+          .where(
+            and(
+              inArray(scheduledPosts.postId, postIds),
+              eq(scheduledPosts.status, "pending")
+            )
+          );
+      }
+
+      return true;
+    });
+
+    if (!wasUpdated) {
       return { ok: false, error: "not_scheduling" };
     }
     return { ok: true, batchId };

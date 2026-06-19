@@ -47,7 +47,7 @@ export function TrialGatedScreen({
               size="lg"
               className="rounded-full glow-champagne"
             >
-              <Link href={`/posts?batchId=${existingBatchId}`}>
+              <Link href={`/schedule-posts/${existingBatchId}`}>
                 Return to my batch
               </Link>
             </Button>
@@ -78,7 +78,7 @@ export function TrialGatedScreen({
         </Button>
         {existingBatchId ? (
           <Button asChild variant="ghost">
-            <Link href={`/posts?batchId=${existingBatchId}`}>
+            <Link href={`/schedule-posts/${existingBatchId}`}>
               Review the batch you made →
             </Link>
           </Button>
