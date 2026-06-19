@@ -13,6 +13,7 @@ import type {
 } from "@/lib/schema";
 import { BatchPostListRow } from "./batch-post-list-row";
 import { CancelBatchTrigger } from "./cancel-batch-trigger";
+import { EditSelectionsTrigger } from "./edit-selections-trigger";
 import { NetworkDayGrid } from "./network-day-grid";
 
 /**
@@ -364,7 +365,8 @@ export function BatchDetailView(props: Props) {
         ))}
       </section>
 
-      <footer className="pt-8 border-t border-border">
+      <footer className="pt-8 border-t border-border flex justify-end gap-3">
+        <EditSelectionsTrigger batchId={batch.id} />
         <CancelBatchTrigger batchId={batch.id} totalPosts={totalPosts} />
       </footer>
     </div>
