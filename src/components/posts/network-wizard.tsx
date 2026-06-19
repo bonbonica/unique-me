@@ -231,9 +231,9 @@ export function NetworkWizard({
   const [scheduleError, setScheduleError] = useState<string | null>(null);
   // One-time disclaimer fired at whole-batch scheduling completion (the
   // reviewing → scheduling OR cancelled → scheduling transition). Opens
-  // once when the action returns ok; the router.refresh() that flips the
-  // page to <LockedSummary /> is deferred until the user dismisses the
-  // dialog. NOT per-post — only at this one batch-level transition.
+  // once when the action returns ok; dismissing it routes the user to
+  // /posting-soon where the freshly-scheduled posts now live in the
+  // network tabs. NOT per-post — only at this one batch-level transition.
   const [disclaimerOpen, setDisclaimerOpen] = useState(false);
 
   // Wave 2 polling-restart fix: derived from the CURRENT `images` state, not
@@ -529,7 +529,11 @@ export function NetworkWizard({
   function handleDisclaimerClose(next: boolean) {
     if (next) return;
     setDisclaimerOpen(false);
-    router.refresh();
+    // Route to /posting-soon — the freshly-scheduled posts now live in
+    // its per-network tabs. Replaces the previous router.refresh() which
+    // landed the user on /schedule-posts/[batchId]'s LockedSummary; that
+    // view is no longer the natural destination after a commit.
+    router.push("/posting-soon");
   }
 
   const scheduleButton = isSummary ? (
@@ -629,9 +633,9 @@ export function NetworkWizard({
       />
 
       {/* One-time disclaimer fired at the reviewing → scheduling OR
-          cancelled → scheduling transition. Dismissing it triggers the
-          deferred router.refresh() that flips the page to
-          <LockedSummary />. */}
+          cancelled → scheduling transition. Dismissing it routes the
+          user to /posting-soon where the freshly-scheduled posts now
+          live. */}
       <Dialog open={disclaimerOpen} onOpenChange={handleDisclaimerClose}>
         <DialogContent className="max-w-md">
           <DialogHeader>

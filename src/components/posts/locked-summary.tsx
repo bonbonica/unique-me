@@ -1,10 +1,5 @@
-"use client";
-
-import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Calendar, Info, Loader2 } from "lucide-react";
-import { stopBatchAction } from "@/app/(app)/(onboarded)/posts/actions";
+import { Calendar, Info } from "lucide-react";
 import { DayLabel } from "@/components/posts/day-label";
 import {
   aspectRatioFor,
@@ -15,15 +10,6 @@ import {
   textFor,
 } from "@/components/posts/network-preview";
 import { PostTileImage } from "@/components/posts/post-tile-image";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
 import {
   dayWindowOrFallback,
@@ -45,18 +31,19 @@ import type {
  *   - `"scheduling"` — batch is locked but real times haven't been
  *     assigned yet (Phase 4 calendar UI will do that). Each card carries
  *     a "Scheduled for: to be assigned" date slot in place of where
- *     Phase 4 will inject the real timestamp. Stop button at the bottom.
+ *     Phase 4 will inject the real timestamp.
  *   - `"cancelled"`  — same cards, same date slot (read as historical
- *     record), plus a "Start a new batch" banner at the top. No Stop
- *     button — there's nothing to stop.
+ *     record), plus a "Start a new batch" banner at the top.
  *
  * Per-card controls are intentionally empty (no Edit / Remove /
  * Regenerate). Edit on a locked batch would land service-layer
  * `batch_locked`; surfacing the button would be a UX trap. The screen
  * is for confirmation viewing, not mutation.
  *
- * The Stop button keeps its current bottom-of-page placement (deliberate
- * — the destructive distance-to-click is a feature, not a bug).
+ * No Stop / Cancel-batch button: per-post unschedule + delete live on
+ * `/posting-soon`. The underlying `postService.stopBatch` service still
+ * exists for any future programmatic caller; this surface just doesn't
+ * expose it as a button.
  */
 
 /**
@@ -105,13 +92,6 @@ type SummaryItem = {
 
 export function LockedSummary({ data }: { data: BatchForReview }) {
   const isCancelled = data.batch.status === "cancelled";
-  const isScheduling = data.batch.status === "scheduling";
-
-  // Shared dialog state for the stop-batch flow. Lifted out of
-  // <StopBatchDialog /> so both the top-of-header trigger and the
-  // bottom-of-page trigger flip the same `open` flag and call the
-  // same confirm handler — one dialog instance, one source of truth.
-  const [stopOpen, setStopOpen] = useState(false);
 
   // All selections that exist in the persisted state. Unlike the wizard
   // summary, we don't filter by `data.platforms` here — a cancelled batch
@@ -135,34 +115,17 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
 
   return (
     <div className="max-w-5xl mx-auto space-y-8">
-      <header
-        className={
-          isScheduling
-            ? "flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4"
-            : "space-y-2"
-        }
-      >
-        <div className="space-y-2 flex-1">
-          <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-            {isCancelled
-              ? "Batch cancelled"
-              : currentlyPostingHeading(data.batch.batchOrdinalInPeriod)}
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {isCancelled
-              ? "This batch was cancelled. Nothing was posted."
-              : "Your selections are locked. Stopping will cancel the batch."}
-          </p>
-        </div>
-        {isScheduling ? (
-          <Button
-            variant="destructive"
-            className="rounded-lg self-start sm:self-auto"
-            onClick={() => setStopOpen(true)}
-          >
-            Stop entire batch
-          </Button>
-        ) : null}
+      <header className="space-y-2">
+        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+          {isCancelled
+            ? "Batch cancelled"
+            : currentlyPostingHeading(data.batch.batchOrdinalInPeriod)}
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          {isCancelled
+            ? "This batch was cancelled. Nothing was posted."
+            : "Your selections are locked."}
+        </p>
       </header>
 
       {/* Persistent informational notice on the currently-posting view.
@@ -220,22 +183,6 @@ export function LockedSummary({ data }: { data: BatchForReview }) {
         </ul>
       )}
 
-      {isScheduling ? (
-        <div className="border-t border-border pt-6">
-          <Button
-            variant="destructive"
-            className="rounded-lg"
-            onClick={() => setStopOpen(true)}
-          >
-            Stop entire batch
-          </Button>
-          <StopBatchDialog
-            batchId={data.batch.id}
-            open={stopOpen}
-            onOpenChange={setStopOpen}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -317,112 +264,3 @@ function LockedCard({
   );
 }
 
-/**
- * Confirmation Dialog for the stop-batch flow. Two-step interaction
- * (button → dialog → "Yes, stop it") makes cancellation deliberate.
- * Server-side, {@link stopBatchAction} only succeeds when the batch is
- * currently in `"scheduling"` — the SQL guard prevents double-stops or
- * stops after Phase 4 transitions the batch to `"scheduled"`.
- *
- * Controlled component: `open` is owned by {@link LockedSummary} so the
- * top-of-header and bottom-of-page triggers can share one dialog
- * instance. `submitting` and `error` remain internal — they belong to
- * the confirm flow itself.
- */
-function StopBatchDialog({
-  batchId,
-  open,
-  onOpenChange,
-}: {
-  batchId: string;
-  open: boolean;
-  onOpenChange: (next: boolean) => void;
-}) {
-  const router = useRouter();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleConfirm() {
-    setSubmitting(true);
-    setError(null);
-    const result = await stopBatchAction(batchId);
-    if (result.ok) {
-      onOpenChange(false);
-      // After a successful stop the page re-renders into the cancelled
-      // view (header copy changes, cancelled banner appears). Jumping
-      // instantly to the top lets the user land at the new top cleanly
-      // — a smooth scroll while the route segment refreshes feels choppy.
-      window.scrollTo({ top: 0, behavior: "instant" });
-      router.refresh();
-    } else {
-      setError(stopErrorCopy(result.error));
-      setSubmitting(false);
-    }
-  }
-
-  function handleOpenChange(next: boolean) {
-    if (!next) {
-      setError(null);
-    }
-    onOpenChange(next);
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Stop entire batch?</DialogTitle>
-          <DialogDescription>
-            This cancels the batch. Nothing posts to any network. You
-            can&apos;t undo this.
-          </DialogDescription>
-        </DialogHeader>
-
-        {error ? (
-          <p role="alert" className="text-destructive text-sm">
-            {error}
-          </p>
-        ) : null}
-
-        <DialogFooter className="gap-2">
-          <Button
-            variant="ghost"
-            onClick={() => handleOpenChange(false)}
-            disabled={submitting}
-          >
-            Never mind
-          </Button>
-          <Button
-            variant="destructive"
-            onClick={handleConfirm}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="animate-spin size-4 mr-2" aria-hidden />
-                Cancelling…
-              </>
-            ) : (
-              "Yes, stop it"
-            )}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function stopErrorCopy(err: string): string {
-  switch (err) {
-    case "not_scheduling":
-      return "This batch isn't in a state that can be stopped.";
-    case "not_owned":
-      return "You don't have access to this batch.";
-    case "not_found":
-      return "Batch not found.";
-    case "db_failed":
-      return "Couldn't cancel the batch. Try again.";
-    default:
-      return "Something went wrong.";
-  }
-}
