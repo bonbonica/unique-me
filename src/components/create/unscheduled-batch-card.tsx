@@ -6,7 +6,22 @@ import { cn } from "@/lib/utils";
 import { DeleteBatchForeverTrigger } from "./delete-batch-forever-trigger";
 import type { DeleteWarning } from "./delete-batch-forever-dialog";
 
-type Props = { data: Data; warning: DeleteWarning };
+/**
+ * `linkBuilder` lets callers override the per-card destination URL. The
+ * default (`/posts?batchId={id}`) preserves today's `/create` behavior;
+ * `/schedule-posts` passes a builder that points at `/schedule-posts/{id}`
+ * so it can adopt these same cards without piggy-backing on the legacy
+ * redirect. Both the reviewing-card `[Open]` button and the cancelled-card
+ * `[Posts are cancelled…]` button route through the same builder so they
+ * stay in lock-step.
+ */
+type Props = {
+  data: Data;
+  warning: DeleteWarning;
+  linkBuilder?: (batchId: string) => string;
+};
+
+const defaultLinkBuilder = (batchId: string) => `/posts?batchId=${batchId}`;
 
 /**
  * Presentational card for a single unscheduled batch on the Create Posts hub.
@@ -39,7 +54,12 @@ type Props = { data: Data; warning: DeleteWarning };
  * so users can copy their own content; the rest of the card surface is
  * non-selectable per the body-wide reset in `globals.css` (D-S2-23).
  */
-export function UnscheduledBatchCard({ data, warning }: Props) {
+export function UnscheduledBatchCard({
+  data,
+  warning,
+  linkBuilder = defaultLinkBuilder,
+}: Props) {
+  const href = linkBuilder(data.id);
   // Total content pieces across networks — see file docblock for the
   // rationale. Same formula used by `<ScheduledBatchBox />` so /create and
   // /schedule labels stay aligned for the same batch.
@@ -75,7 +95,7 @@ export function UnscheduledBatchCard({ data, warning }: Props) {
         {isCancelled && (
           <div className="flex justify-end">
             <Button asChild size="sm">
-              <Link href={`/posts?batchId=${data.id}`}>
+              <Link href={href}>
                 Posts are cancelled, click to reschedule
                 <ArrowRight
                   className="ml-1 size-4"
@@ -126,7 +146,7 @@ export function UnscheduledBatchCard({ data, warning }: Props) {
               />
             ) : (
               <Button asChild size="sm">
-                <Link href={`/posts?batchId=${data.id}`}>
+                <Link href={href}>
                   Open
                   <ArrowRight
                     className="ml-1 size-4"

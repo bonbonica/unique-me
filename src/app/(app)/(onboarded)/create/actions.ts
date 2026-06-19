@@ -24,9 +24,10 @@ import type { GenerateActionState } from "./action-types";
  *      client-side validation; we trim and require both.
  *   3. Delegate to `postService.generateWeekly`, which handles the trial-cap
  *      gate (D20), the Anthropic call, and the transactional persist.
- *   4. On success, redirect to `/posts?batchId=...` so the page re-renders
- *      against the new batch. On failure, return `{ error }` for the form to
- *      surface inline.
+ *   4. On success, redirect to `/schedule-posts/...` so the user lands
+ *      directly in the per-batch review view for the new batch (path-
+ *      based segment per the navigation redesign). On failure, return
+ *      `{ error }` for the form to surface inline.
  *
  * The `trial_batch_exists` branch redirects back to `/create` (which then
  * renders the gated screen) rather than returning an error, because the
@@ -117,7 +118,7 @@ export async function generateWeeklyAction(
   });
 
   if (result.ok) {
-    redirect(`/posts?batchId=${result.batchId}`);
+    redirect(`/schedule-posts/${result.batchId}`);
   }
 
   switch (result.error) {

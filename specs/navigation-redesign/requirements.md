@@ -2,7 +2,7 @@
 
 ## Summary
 
-UniqueMe's left sidebar and page set have grown alongside the product and now show their seams: the user has a dashboard, a Create hub, a Review/Schedule page, a Currently Posting page, and a Scheduled grid — five surfaces that overlap in purpose and confuse the natural left-to-right flow of "create → review → schedule → publish". This redesign reshapes the navigation into a single linear story: **Create Posts → Schedule Posts → Posting Soon → (Image Library / Settings) → Cancelled Posts**, deletes the dashboard, retires the dormant Currently Posting page, and introduces a proper Cancelled Posts page with both whole-batch and per-post recovery.
+UniqueMe's left sidebar and page set have grown alongside the product and now show their seams: the user has a dashboard, a Create hub, a Review/Schedule page, a Currently Posting page, and a Scheduled grid — five surfaces that overlap in purpose and confuse the natural left-to-right flow of "create → review → schedule → publish". This redesign reshapes the navigation into a single linear story: **Create Posts → Schedule Posts → Posting Soon → (Image Library / Settings) → Cancelled Posts**, deletes the dashboard, retires the dormant Currently Posting page, and introduces a Cancelled Posts page as ONE list of individual cancelled posts (per-post cancels AND whole-batch cancels both surface as individual rows) with a per-row REPOST action that prompts the user to choose between "natural fit" or "pick a date".
 
 The redesign **does not change any underlying logic** for generation, review, editing, regeneration, or scheduling. It reorganizes and renames pages, moves the dashboard's stat boxes to Create Posts (always visible to everyone), converts the trial gate from a full-page block into a click-time modal, adds per-post and bulk cancel to the scheduled view, and relabels "batch" → "week" in friendly UI copy (quota copy stays in batches because the quota model itself is a separate future project).
 
@@ -16,8 +16,8 @@ The expected outcome: a calmer, more obvious app that surfaces fewer screens, sh
 - Convert the trial-used gate from a full-page `TrialGatedScreen` into a click-time blocking Dialog modal — trial-used users see the normal page until they tap the button.
 - After generation finishes, auto-route the user directly into the per-batch review view for the new batch (today's behavior, just on the new URL).
 - Add per-post cancel and bulk cancel ("Select" mode) on Posting Soon.
-- Build the Cancelled Posts page with two sections: cancelled whole batches up top, cancelled single posts below.
-- Add a single-post restore path: restores to original time if still future; otherwise opens a time-picker.
+- Build the Cancelled Posts page as ONE list of individual cancelled posts. Per-post cancels and whole-batch cancels both surface as individual rows (the underlying data prep — `stopBatch` flipping child `scheduled_posts` rows to `'cancelled'` — is part of this redesign).
+- Add a per-row REPOST action with a two-option Dialog: "Repost where it naturally fits the most" (service picks the next sensible slot) OR "Pick a date" (time-picker). No third "restore at original time" option.
 - Retire the `/posts/currently-posting` route and the dormant `currently_posting` derivedState code.
 - Relabel "batch" → "week" in friendly UI copy across the app; **leave quota copy in batches**.
 - Reduce inline explanatory text on the touched pages; lift to popups/tooltips where useful.
@@ -42,8 +42,9 @@ The expected outcome: a calmer, more obvious app that surfaces fewer screens, sh
 - [ ] After generation completes, the user lands at `/schedule-posts/[batchId]` in the review view.
 - [ ] `/schedule-posts` lists in-flight (reviewing-status) batches; the per-batch detail at `/schedule-posts/[batchId]` is the existing NetworkWizard.
 - [ ] `/posting-soon` shows scheduled batches with per-post cancel buttons and a "Select" mode toggle that enables bulk cancel via checkboxes + confirmation dialog.
-- [ ] `/cancelled-posts` shows two sections: "Cancelled batches" (top) and "Cancelled single posts" (below); each with a row-level restore action.
-- [ ] Single-post restore: if `scheduled_time > now`, calls `restorePost`; if past, opens a time-picker dialog before restoring.
+- [ ] `/cancelled-posts` shows ONE list of every cancelled `scheduled_posts` row for the user; per-post cancels and whole-batch cancels both appear as individual rows.
+- [ ] Each row has a REPOST action that opens a Dialog with exactly two options: "Repost where it naturally fits the most" (natural-fit slot) and "Pick a date" (time-picker). Both flip the row from `'cancelled'` back to `'pending'` with an updated `scheduled_time`.
+- [ ] `stopBatch` flips every previously-`pending` child `scheduled_posts` row to `'cancelled'` in the same transaction that cancels the parent batch.
 - [ ] `/posts/currently-posting` route is deleted; sidebar no longer links there.
 - [ ] Legacy URLs redirect: `/posts` → `/schedule-posts`, `/posts?batchId=X` → `/schedule-posts/X`, `/schedule` → `/posting-soon`, `/schedule/X` → `/posting-soon/X`, `/dashboard` → `/create`.
 - [ ] "Batch" → "Week" sweep complete in friendly copy; quota copy still reads in batches.
@@ -53,9 +54,9 @@ The expected outcome: a calmer, more obvious app that surfaces fewer screens, sh
 ## Assumptions
 
 - The PDF spec set (`C:\UniqueMe\UniqueMe pdf\`) describes a `/dashboard/*`-nested routing tree that the current app already departed from (it uses flat top-level routes). This redesign drifts further from the PDFs intentionally; the user has approved this drift.
-- Stage-2 backend functions `postService.cancelPost(postId, platform?)` (`src/lib/services/post-service.ts:1721`) and `postService.restorePost(...)` (`src/lib/services/post-service.ts:1839`) are wired and behave per their Stage-2 spec.
+- Stage-2 backend function `postService.cancelPost(postId, platform?)` (`src/lib/services/post-service.ts:1721`) is wired and behaves per its Stage-2 spec. (Stage-2's `restorePost` is superseded by this redesign's `repostScheduledPost` — see task-11. `stopBatch` is extended by task-06 to also cancel child rows.)
 - `scheduled_posts.status` enum values are `"pending" | "posted" | "failed" | "cancelled"` (`src/lib/schema.ts:665-669`). Cancelled rows remain in the DB; they are not deleted.
-- `weeklyBatches.status` values include `"cancelled"` and cancelled batches keep their rows + child rows.
+- `weeklyBatches.status` values include `"cancelled"` and cancelled batches keep their rows. After task-06 ships, their child `scheduled_posts` rows also flip to `"cancelled"` (today they stay at `"pending"`) — this is the data-shape change that lets the single-list Cancelled Posts query catch batch-cancelled posts via the same status filter as per-post cancels.
 - The `currently_posting` derivedState in `BatchBoxData` is never written in Stage-1 code; deleting the dead state and `/posts/currently-posting` route is safe.
 - "Posts Scheduled" stat = total count of `scheduled_posts` rows with `status='pending'` across all batches for the user (not just this week).
 - "Connected accounts" stat = number of distinct connected social platforms (0–3 from FB / IG / LI), via the existing connected-accounts service.

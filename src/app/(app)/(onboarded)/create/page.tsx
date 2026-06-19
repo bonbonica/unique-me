@@ -2,13 +2,10 @@ import { headers } from "next/headers";
 import {
   CreateHubFormProvider,
   CreateHubFormSlot,
-  CreateHubStartNewBatchButton,
 } from "@/components/create/create-hub-form-slot";
-import type { DeleteWarning } from "@/components/create/delete-batch-forever-dialog";
 import { QuotaGatedScreen } from "@/components/create/quota-gated-screen";
 import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
 import { TrialNote } from "@/components/create/trial-note";
-import { UnscheduledBatchList } from "@/components/create/unscheduled-batch-list";
 import { auth } from "@/lib/auth";
 import { type Profile } from "@/lib/schema";
 import {
@@ -16,37 +13,21 @@ import {
   profileService,
   subscriptionService,
 } from "@/lib/services";
-import type { SubscriptionStateSnapshot } from "@/lib/services/subscription-service";
 
 /**
- * `/create` — the **Create Posts hub** (spec § 6.9, D-S2 / D-S14).
+ * `/create` — the **Create Posts hub**.
  *
- * Hub structure (one container, vertical slots):
- *
- *   1. Header — `"Create Posts"` (Fraunces) + optional `<TrialNote />`.
- *   2. `<UnscheduledBatchList />` — top buttons row, then the form (or gated
- *      screen) directly under the buttons via the `belowButtonsSlot` prop,
- *      then the stacked cards for any batches in `reviewing` / `cancelled`.
- *      The order puts the create-new-posts action ABOVE existing batches so
- *      the form expands next to the button that triggers it rather than
- *      below the user's cancelled cards. Self-hides when there are zero
- *      cards AND no `startNewBatchSlot` injected — see fresh-state branch
- *      below.
- *   3. **Fresh state only** — when there are zero cards and the user can
- *      create, `<UnscheduledBatchList />` returns null and the form
- *      (`belowSlot`) is rendered directly under the header so it takes the
- *      full frame.
- *
- * The collapse rule (D-S14): when 1+ cards exist + the user can generate,
- * the form starts collapsed and the top `[Start new batch]` button toggles
- * it. When zero cards exist + the user can generate, the form is expanded
- * by default so fresh-state users see it immediately. Gate screens take
- * the form's slot exactly as before.
+ * Wave 1 of the navigation redesign moved the in-flight batch cards
+ * (`<UnscheduledBatchList />`) out of this page and onto `/schedule-posts`.
+ * What remains here is the create-new-posts surface: header, optional
+ * `<TrialNote />`, and the form (or a gated screen) rendered directly
+ * under it. Wave 3 (task-09) will rebuild this page further into the
+ * single-job Create Posts surface (button + 3 stats + click-time trial
+ * Dialog); this Wave 1 state is an interim.
  *
  * All five `canGenerate` reason codes (`trial_batch_exists`,
  * `weekly_cap_active`, `monthly_cap_active`, `starter_platforms_overage`,
- * `plan_inactive`) are preserved. None of them are new in this redesign —
- * the hub is a render-time concern (spec D-S17).
+ * `plan_inactive`) are preserved — gating is a render-time concern.
  *
  * Placeholder personalisation reads the profile's `websiteAnalysis` blob
  * (populated during onboarding) for `suggestedTopics` /
@@ -62,28 +43,16 @@ export default async function CreatePage() {
   const subscription = await subscriptionService.checkSubscription(
     session.user.id,
   );
-  const cards = await postService.getUnscheduledBatchesForUser(session.user.id);
-  // Tier-aware copy context for `<DeleteBatchForeverDialog />` — derived
-  // once from the snapshot the page already loaded (no extra service call).
-  // Threaded through the list/card/trigger to the dialog; see
-  // specs/delete-warning/spec.md §3.
-  const deleteWarning = deriveDeleteWarning(subscription);
 
-  // The three locals the final return composes. `belowSlot` is the
-  // form-OR-gated-screen rendered under the cards; `canStartNew` controls
-  // whether the top "Start new batch" affordance is interactive (and
-  // whether we even inject a custom button slot at all); `capacityTooltip`
-  // is the disabled-button title text on the at-cap paths.
+  // Wave 1 of the redesign removed the cards list, so `capacityTooltip`
+  // (the disabled-button tooltip for the now-gone top button) and
+  // `deleteWarning` (passed to the cards) are no longer derived here.
+  // `belowSlot` is the form-OR-gated-screen rendered under the header;
+  // `canStartNew` controls whether the form is rendered at all.
   let belowSlot: React.ReactNode;
   let canStartNew = false;
-  let capacityTooltip: string | undefined;
 
   // Gate (D20): trial + any batch (incl. cancelled) → upgrade screen.
-  // We use getMostRecentBatch (any status) rather than the previous
-  // hasAnyBatch + getCurrentBatch combo so the gated screen can deep-link
-  // back to a cancelled batch — the cancelled-recoverable flow needs the
-  // user to be able to find their batch again, and getCurrentBatch
-  // intentionally hides cancelled.
   if (subscription.status === "trial") {
     const mostRecent = await postService.getMostRecentBatch(session.user.id);
     if (mostRecent) {
@@ -93,7 +62,6 @@ export default async function CreatePage() {
           batchStatus={mostRecent.status}
         />
       );
-      capacityTooltip = "Trial includes one batch.";
     }
   }
 
@@ -112,7 +80,6 @@ export default async function CreatePage() {
           belowSlot = (
             <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
           );
-          capacityTooltip = "You've used all batches this period.";
           break;
         case "monthly_cap_active":
           // Temporary: reuses the weekly_cap_active "quota" variant so the
@@ -122,7 +89,6 @@ export default async function CreatePage() {
           belowSlot = (
             <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
           );
-          capacityTooltip = "You've used all batches this period.";
           break;
         case "starter_platforms_overage":
           belowSlot = (
@@ -131,11 +97,9 @@ export default async function CreatePage() {
               currentCount={gate.currentCount}
             />
           );
-          capacityTooltip = "Reduce your platforms in Settings to continue.";
           break;
         case "plan_inactive":
           belowSlot = <QuotaGatedScreen variant="inactive" />;
-          capacityTooltip = "Your plan is inactive.";
           break;
         case "trial_batch_exists":
           // Unreachable — the explicit trial branch above already set
@@ -163,12 +127,10 @@ export default async function CreatePage() {
   const showTrialNote =
     subscription.status === "trial" && daysLeft !== null && daysLeft > 0;
 
-  // Collapse rule (D-S14):
-  //   - 1+ cards + form allowed → form starts collapsed; top button opens it.
-  //   - 0 cards + form allowed → form starts expanded; no top button.
-  // Gated paths don't render the form at all, so this flag is irrelevant
-  // for them.
-  const initiallyExpanded = canStartNew && cards.length === 0;
+  // Wave 1 redesign: the cards list is gone, so the form is always
+  // expanded by default when allowed (gated paths render their gate
+  // screen in `belowSlot` instead and ignore this flag).
+  const initiallyExpanded = canStartNew;
 
   return (
     <CreateHubFormProvider initiallyExpanded={initiallyExpanded}>
@@ -180,26 +142,7 @@ export default async function CreatePage() {
           {showTrialNote ? <TrialNote daysLeft={daysLeft} /> : null}
         </header>
 
-        <UnscheduledBatchList
-          cards={cards}
-          hasCapacity={canStartNew}
-          warning={deleteWarning}
-          {...(capacityTooltip !== undefined ? { capacityTooltip } : {})}
-          {...(canStartNew && cards.length > 0
-            ? { startNewBatchSlot: <CreateHubStartNewBatchButton /> }
-            : {})}
-          belowButtonsSlot={belowSlot}
-        />
-
-        {/*
-          Fresh-state fallback: when there are zero cards AND no startNewBatchSlot
-          is injected, `<UnscheduledBatchList />` returns null (it has no
-          buttons row to render) and the form needs to render here directly so
-          it still appears on the page. In the cards-present path the list
-          already rendered the form via `belowButtonsSlot` above, so this
-          branch is a no-op.
-        */}
-        {cards.length === 0 && belowSlot}
+        {belowSlot}
       </div>
     </CreateHubFormProvider>
   );
@@ -300,56 +243,7 @@ function businessTypeImportantDefault(type: string | undefined): string {
   }
 }
 
-// =============================================================================
-// Delete-warning derivation (specs/delete-warning/spec.md §3)
-// =============================================================================
-
-/**
- * Pick the tier-aware copy context for `<DeleteBatchForeverDialog />` off
- * the existing subscription snapshot. Pure synchronous transformation —
- * no service call, no DB hit. Called once per `/create` render.
- *
- * The `starter` variant's `nextAvailable` is intentionally nullable. A null
- * value means "we don't know the next-available date, so don't print one" —
- * the dialog renders the neutral Starter copy (no date claim). We never
- * substitute `new Date()` or any other placeholder: fabricating a date the
- * user can hold us to would be worse than omitting it. See spec §3
- * "Why nullable instead of a sentinel".
- *
- * Branch order:
- *   1. Trial (`status === "trial"`, regardless of `plan`).
- *   2. Active Pro with `proQuota` populated → at-cap vs under-cap split.
- *   3. Active Starter → date may be null on the no-prior-batch path.
- *   4. Inactive paid plans → falls through as Starter-shaped with whatever
- *      `nextResetAt` carries (typically `null` for inactive); the dialog
- *      renders the neutral Starter copy. No fifth variant per spec §3.
- */
-function deriveDeleteWarning(
-  snapshot: SubscriptionStateSnapshot,
-): DeleteWarning {
-  if (snapshot.status === "trial") {
-    return { tier: "trial" };
-  }
-
-  if (snapshot.plan === "pro" && snapshot.proQuota) {
-    if (snapshot.proQuota.used >= snapshot.proQuota.max) {
-      return {
-        tier: "pro_at_cap",
-        nextAvailable: snapshot.proQuota.periodEndsAt,
-      };
-    }
-    return {
-      tier: "pro_under_cap",
-      remaining: snapshot.proQuota.max - snapshot.proQuota.used,
-    };
-  }
-
-  if (snapshot.plan === "starter" && snapshot.status === "active") {
-    return { tier: "starter", nextAvailable: snapshot.nextResetAt };
-  }
-
-  // Inactive paid plans (cancelled/expired Starter or Pro). `nextResetAt`
-  // returns null on the inactive branch — passed through so the dialog
-  // renders the neutral Starter copy without a fabricated date.
-  return { tier: "starter", nextAvailable: snapshot.nextResetAt };
-}
+// Wave 1: `deriveDeleteWarning` moved to `/schedule-posts/page.tsx`
+// where the cards (and their delete-forever trigger) now live. Wave 3's
+// `/create` rebuild may re-introduce a similar helper if the new surface
+// needs tier-aware copy context — unknown at the time of Wave 1.

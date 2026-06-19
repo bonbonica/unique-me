@@ -1,4 +1,4 @@
-# Task 06: Populate Cancelled Batches section on /cancelled-posts
+# Task 06: stopBatch cancels child scheduled_posts rows
 
 ## Status
 
@@ -10,125 +10,75 @@ pending
 
 ## Description
 
-Wave 1's task-03 created `/cancelled-posts` with two empty section shells. This task fills the first section ("Cancelled batches") with the user's cancelled `weeklyBatches` rows. Each row links into the existing cancelled-recovery flow (NetworkWizard in `cancelled` mode) at `/schedule-posts/[batchId]` — so a user clicking a cancelled batch lands in the editor where they can re-edit and re-schedule it (today's behavior preserved). The "Delete forever" affordance from the existing `delete-batch-forever-dialog.tsx` is exposed per-row.
+**Repurposed 2026-06-19** following the design pivot to a single-list Cancelled Posts page (no separate "Cancelled batches" section). Originally this task built the batches section; under the new design, every cancelled item — whether one-off or part of a whole-batch cancel — is treated as an individual cancelled post and surfaces in the single list on `/cancelled-posts`.
+
+For the Wave 4 single-list query (task-11) to find batch-cancelled posts via the same `status = 'cancelled'` filter it uses for per-post cancels, the `postService.stopBatch` action must also flip every child `scheduled_posts.status` from `'pending'` to `'cancelled'` in the same transaction that flips `weeklyBatches.status` to `'cancelled'`. Today (per the exploration report) `stopBatch` only updates `weeklyBatches.status` and leaves child rows untouched at `'pending'` — so without this change those posts would still look schedulable, which is wrong.
+
+This is a data-layer change: no UI work in this task. Wave 4 task-11 builds on top of it.
 
 ## Dependencies
 
 **Depends on:** task-01, task-02, task-03, task-04, task-05 (all of Wave 1)
-**Blocks:** task-07 (we want the new home for cancelled batches to be live before stripping them from `/create`), task-08, task-09
+**Blocks:** task-11 (the single-list query relies on the unified `scheduled_posts.status = 'cancelled'` semantics this task establishes)
 
-**Context from dependencies:** task-03 created `src/app/(app)/(onboarded)/cancelled-posts/_components/cancelled-batches-section.tsx` as a placeholder that returns an empty-state `<p>`. This task replaces the placeholder body with a real query + render. task-02 moved the cancelled-batch detail experience to `/schedule-posts/[batchId]` (NetworkWizard's `cancelled` mode renders there). task-01 / task-04 / task-05 wrap up sidebar / Currently Posting cleanup / legacy redirects — nothing in this task depends on their specifics beyond "they're done".
+**Context from dependencies:** Wave 1 stripped the cancelled-batch surfacing from `/create` and created the `/cancelled-posts` shell with one empty list. This task does NOT touch any UI; it changes the cancel semantics at the service layer so the Wave 4 single-list query has clean data to read.
 
 ## Files to Create
 
-None (writes happen inside the placeholder file from task-03).
+None.
 
 ## Files to Modify
 
-- `src/app/(app)/(onboarded)/cancelled-posts/_components/cancelled-batches-section.tsx` — replace placeholder with real data fetching + row rendering.
-- `src/lib/services/post-service.ts` — if no helper exists, add a thin `getCancelledBatchesForUser(userId)` returning the user's cancelled `weeklyBatches` rows (with the fields needed to render a row: id, theme, importantThing, batchOrdinalInPeriod, createdAt, postCount). The existing `getUnscheduledBatchesForUser` (line 586) probably already returns cancelled batches mixed with reviewing — if so, prefer a dedicated query for clarity.
+- `src/lib/services/post-service.ts` — extend `stopBatch(batchId, userId)` so its transaction includes:
+  ```sql
+  UPDATE scheduled_posts
+     SET status = 'cancelled', cancelled_at = NOW()  -- if column exists; else just status
+   WHERE post_id IN (SELECT id FROM posts WHERE batch_id = ?)
+     AND status = 'pending';
+  ```
+  Adjust column names to match the actual Drizzle schema. Run inside the same `db.transaction(...)` block that flips `weeklyBatches.status` so the two writes are atomic.
+- Any service-level tests for `stopBatch` (search `src/lib/services/__tests__/`) — extend an existing test or add a small case asserting that after `stopBatch`, every previously-`pending` `scheduled_posts` row for the batch's posts is now `cancelled`. (Per `AGENTS.md`: no NEW test infrastructure; only extend if a test file already exists. If none, skip and document in handoff.)
+
+## Files to Delete
+
+None.
 
 ## Technical Details
 
 ### Implementation Steps
 
-1. **Choose data path.** Read `src/lib/services/post-service.ts` around line 586 (`getUnscheduledBatchesForUser`). If it returns cancelled batches alongside reviewing batches, decide between:
-   - Option A: Filter at the call site in the section component (`.filter(b => b.status === "cancelled")`).
-   - Option B: Add a new typed helper `getCancelledBatchesForUser(userId)` that runs a dedicated query (`where(eq(weeklyBatches.userId, userId), eq(weeklyBatches.status, "cancelled"))`). Preferred — clearer intent, smaller payload, easier to extend.
-2. **Update the section component.** `src/app/(app)/(onboarded)/cancelled-posts/_components/cancelled-batches-section.tsx`:
-   - Read the current user (via the project's auth helper — match what `/dashboard/page.tsx` uses today).
-   - Call the cancelled-batches fetch.
-   - If the result is empty, keep the existing empty-state `<p>` ("Nothing cancelled.").
-   - If non-empty, render a list of rows. Each row should follow the existing `UnscheduledBatchList` row pattern (search `src/components/` for it) so the visual language stays consistent — reuse the same row component if it accepts a `cancelled` mode.
-3. **Row contents** (per batch):
-   - Batch identity line — Fraunces small heading: theme + ordinal (e.g. "Week 2 · Spring drops" or whatever today's card shows).
-   - Cancelled-at timestamp (use `weeklyBatches.updatedAt` if that's what today's cancel flow stamps; otherwise `createdAt`). Format: `text-sm text-muted-foreground`.
-   - Two actions: "Recover" (links to `/schedule-posts/[batchId]`, which renders NetworkWizard in `cancelled` mode for re-edit + re-schedule) and "Delete forever" (opens the existing `<DeleteBatchForeverDialog>` component).
-4. **Reuse existing UI primitives** from the row component used by today's `UnscheduledBatchList` for cancelled cards. If extracting/reusing isn't clean, build a minimal row that visually matches per `DESIGN.md` § 9 (card-like, but rendered inside the section card — no double card chrome; use a `border-t border-border pt-4` divider between rows).
-5. **Wire the Delete-forever dialog.** Import the existing `<DeleteBatchForeverDialog>` (file: search `src/components/` for it; per exploration it lives near `delete-batch-forever-dialog.tsx` and is wired into the existing cancelled-recovery cards on `/create`). Pass `batchId` and `mode` if it accepts those props (mirror today's usage).
-6. Run `pnpm lint`, `pnpm typecheck`, `pnpm build`.
-7. Dev-server smoke test: create a batch, schedule it, cancel the batch (use today's "Stop entire batch" action), navigate to `/cancelled-posts`, confirm the batch appears in section 1 with both actions wired.
+1. **Read the current `stopBatch` implementation** (post-service.ts:1632 per the exploration report). Note the transaction scope, ownership/status guards, and return shape.
+2. **Within the same transaction**, after the `weeklyBatches` status flip, add a bulk update against `scheduled_posts`:
+   - Filter: `post_id` belongs to this batch AND `status = 'pending'`.
+   - Set: `status = 'cancelled'` (and `cancelled_at = now()` / `updated_at = now()` if those columns exist per the schema).
+3. **Do not flip rows that are already `posted` or `failed`** — they are terminal states and must stay. The `status = 'pending'` filter handles this.
+4. **Do not introduce a new column or schema migration.** Use whatever timestamp columns already exist on `scheduled_posts`.
+5. **Verify with a quick reality check** in the dev environment if convenient: create a batch, schedule it, hit `stopBatch`, then `SELECT status FROM scheduled_posts WHERE post_id IN (...)` — every row should read `cancelled`.
+6. **Run quality gates:** `pnpm lint`, `pnpm typecheck`, `pnpm build`.
 
-### Code Snippets
+### Notes on backward compatibility
 
-Section component sketch:
-
-```tsx
-// src/app/(app)/(onboarded)/cancelled-posts/_components/cancelled-batches-section.tsx
-import { auth } from "@/lib/auth"; // or project equivalent
-import { postService } from "@/lib/services/post-service";
-import { CancelledBatchRow } from "./cancelled-batch-row"; // co-locate
-
-export async function CancelledBatchesSection() {
-  const session = await auth();
-  if (!session?.user?.id) return null;
-
-  const batches = await postService.getCancelledBatchesForUser(session.user.id);
-
-  return (
-    <section className="bg-card rounded-2xl border border-border shadow-soft p-8 space-y-4">
-      <header className="flex items-baseline justify-between">
-        <h2 className="text-2xl font-medium tracking-tight font-fraunces">Cancelled batches</h2>
-        {batches.length > 0 && (
-          <span className="text-xs text-muted-foreground tabular-nums">{batches.length}</span>
-        )}
-      </header>
-      {batches.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing cancelled.</p>
-      ) : (
-        <ul className="divide-y divide-border">
-          {batches.map((b) => (
-            <li key={b.id} className="py-4">
-              <CancelledBatchRow batch={b} />
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-```
-
-`getCancelledBatchesForUser` sketch:
-
-```ts
-// src/lib/services/post-service.ts (new helper)
-async function getCancelledBatchesForUser(userId: string) {
-  return db
-    .select({
-      id: weeklyBatches.id,
-      theme: weeklyBatches.theme,
-      importantThing: weeklyBatches.importantThing,
-      batchOrdinalInPeriod: weeklyBatches.batchOrdinalInPeriod,
-      createdAt: weeklyBatches.createdAt,
-      updatedAt: weeklyBatches.updatedAt,
-      // postCount: sql<number>`(select count(*) from ${posts} where ${posts.batchId} = ${weeklyBatches.id})`,
-    })
-    .from(weeklyBatches)
-    .where(and(eq(weeklyBatches.userId, userId), eq(weeklyBatches.status, "cancelled"), isNull(weeklyBatches.deletedAt)))
-    .orderBy(desc(weeklyBatches.updatedAt));
-}
-```
-
-(Use whatever the actual schema column for "soft-delete" tombstoning is — per `quota-soft-delete.md` reference there's a `deletedAt`-style column. Mirror existing query patterns in the same file.)
+- The previous `stopBatch` behavior left child rows at `'pending'`. After this change, any code that read `scheduled_posts.status` and expected `'pending'` for a cancelled-batch's posts will read `'cancelled'` instead. Grep for `scheduled_posts` and `status: "pending"` (or equivalent) to confirm no caller depends on the old semantics.
+- Likely affected callers (if any):
+  - Posting worker (when Phase 7 ships) — already needs to skip `cancelled`.
+  - Reporting / counts queries — should now correctly exclude cancelled batches' rows.
+- Phase-2 cancelled-recoverable flow (NetworkWizard `mode="cancelled"`) operates against `posts`, not `scheduled_posts`, so it is unaffected.
 
 ### Notes on what NOT to change
 
-- Do not delete the section component file from task-03 — only modify its body.
-- Do not remove cancelled batches from `/create` here — task-07 owns that.
-- Do not introduce a new restore-cancelled-batch action. The existing NetworkWizard `cancelled` mode at `/schedule-posts/[batchId]` is the recovery path.
-- Do not start populating section 2 (single posts) — task-11 owns that.
+- Do not modify `cancelPost` (per-post cancel). It already does what this task makes `stopBatch` do for the whole batch.
+- Do not delete `scheduled_posts` rows. The semantic is "flipped to cancelled", not "removed".
+- Do not add UI work. The single-list view is task-11 (Wave 4).
+- Do not change the `stopBatch` return shape.
 
 ## Acceptance Criteria
 
-- [ ] `CancelledBatchesSection` queries cancelled batches for the current user and renders them as a list inside section 1.
-- [ ] Empty state still renders "Nothing cancelled." when no cancelled batches exist.
-- [ ] Each row shows batch identity, cancelled timestamp, "Recover" link (→ `/schedule-posts/[batchId]`), and "Delete forever" action (opens existing dialog).
-- [ ] Cancelled batches no longer need to be surfaced on `/create` — task-07 will rely on this section being live.
+- [ ] After `stopBatch(batchId, userId)` returns successfully, every previously-`pending` `scheduled_posts` row whose parent `posts.batchId = batchId` has `status = 'cancelled'`.
+- [ ] Already-`posted` and already-`failed` rows are left untouched.
+- [ ] The status flip and the batch status flip are in the same transaction (one fails → both roll back).
+- [ ] No grep hits for callers that depended on the old "cancelled batch but pending scheduled_posts" semantics.
 - [ ] `pnpm lint`, `pnpm typecheck`, `pnpm build` all pass.
-- [ ] Brand voice: no exclamation points; row copy stays minimal.
 
 ## Notes
 
-- If `getUnscheduledBatchesForUser` already returns cancelled batches mixed in, leaving it as-is (and filtering at the call site) is acceptable IF task-07 will also rely on the same helper. Coordinate via the call-site filter — task-07 then changes the `/create` call site to filter cancelled out, while this task's call site filters cancelled in. Both paths use the same underlying query but distinct status filters.
-- If `weeklyBatches.deletedAt` (tombstone) exists, the cancelled-batches query MUST filter `deletedAt IS NULL` to avoid showing soft-deleted batches.
+This is the "make data unified" prep task for the single-list Cancelled Posts design. Without it, batch-cancelled posts would be invisible to the simple `WHERE status = 'cancelled'` query the Wave 4 list relies on.
