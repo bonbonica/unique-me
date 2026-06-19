@@ -16,6 +16,7 @@ import {
   type PostVariation,
   type SelectionPlatform,
   type WeeklyBatch,
+  connectedAccounts,
   postImages,
   postSelections,
   postVariations,
@@ -309,6 +310,52 @@ export async function countTotalPostsCreated(userId: string): Promise<number> {
         isNull(weeklyBatches.deletedAt)
       )
     );
+  return row?.total ?? 0;
+}
+
+/**
+ * Navigation-redesign Wave 3 (task-09 → moved to Settings): count every
+ * scheduled_posts row for the user that is still `'pending'` — i.e. waiting
+ * to publish. Feeds the "Posts Scheduled" stat box on `/settings`. Joins
+ * through posts → weekly_batches so we only count rows for batches the user
+ * still owns and that aren't tombstoned.
+ */
+export async function countScheduledPendingForUser(
+  userId: string
+): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<number>`coalesce(count(*), 0)::int`,
+    })
+    .from(scheduledPosts)
+    .innerJoin(posts, eq(posts.id, scheduledPosts.postId))
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        eq(scheduledPosts.status, "pending"),
+        isNull(weeklyBatches.deletedAt)
+      )
+    );
+  return row?.total ?? 0;
+}
+
+/**
+ * Navigation-redesign Wave 3 (task-09 → moved to Settings): count distinct
+ * platforms (0–3, from FB / IG / LI) the user has connected. Feeds the
+ * "Connected Accounts" stat box on `/settings`. Phase 5+ will own the OAuth
+ * flow that writes to `connected_accounts`; today the row count is whatever
+ * is currently seeded.
+ */
+export async function countConnectedPlatformsForUser(
+  userId: string
+): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<number>`coalesce(count(distinct ${connectedAccounts.platform}), 0)::int`,
+    })
+    .from(connectedAccounts)
+    .where(eq(connectedAccounts.userId, userId));
   return row?.total ?? 0;
 }
 

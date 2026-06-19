@@ -121,10 +121,10 @@ export function GenerateForm({
         {pending ? (
           <>
             <Loader2 className="animate-spin size-4 mr-2" aria-hidden />
-            Generating…
+            Creating posts…
           </>
         ) : (
-          "Generate this week"
+          "Create new posts"
         )}
       </Button>
     </form>

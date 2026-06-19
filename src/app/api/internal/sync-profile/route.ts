@@ -13,7 +13,7 @@ export async function GET(request: Request) {
   const safeTarget =
     target && target.startsWith("/") && !target.startsWith("//")
       ? target
-      : "/dashboard";
+      : "/create";
 
   const session = await auth.api.getSession({ headers: await headers() });
   if (!session) {

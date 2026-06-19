@@ -15,7 +15,7 @@ export default async function ResetPasswordPage() {
   const session = await auth.api.getSession({ headers: await headers() })
 
   if (session) {
-    redirect("/dashboard")
+    redirect("/create")
   }
 
   return (

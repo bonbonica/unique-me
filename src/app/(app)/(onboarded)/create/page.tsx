@@ -1,11 +1,7 @@
 import { headers } from "next/headers";
-import {
-  CreateHubFormProvider,
-  CreateHubFormSlot,
-} from "@/components/create/create-hub-form-slot";
+import { CreateTrialButton } from "@/components/create/create-trial-button";
+import { GenerateForm } from "@/components/create/generate-form";
 import { QuotaGatedScreen } from "@/components/create/quota-gated-screen";
-import { TrialGatedScreen } from "@/components/create/trial-gated-screen";
-import { TrialNote } from "@/components/create/trial-note";
 import { auth } from "@/lib/auth";
 import { type Profile } from "@/lib/schema";
 import {
@@ -15,19 +11,26 @@ import {
 } from "@/lib/services";
 
 /**
- * `/create` — the **Create Posts hub**.
+ * `/create` — Create Posts (navigation redesign Wave 3 / task-09).
  *
- * Wave 1 of the navigation redesign moved the in-flight batch cards
- * (`<UnscheduledBatchList />`) out of this page and onto `/schedule-posts`.
- * What remains here is the create-new-posts surface: header, optional
- * `<TrialNote />`, and the form (or a gated screen) rendered directly
- * under it. Wave 3 (task-09) will rebuild this page further into the
- * single-job Create Posts surface (button + 3 stats + click-time trial
- * Dialog); this Wave 1 state is an interim.
+ * The page is intentionally minimal: a title and ONE thing the user can
+ * act on. Which "one thing" depends on their state:
  *
- * All five `canGenerate` reason codes (`trial_batch_exists`,
- * `weekly_cap_active`, `monthly_cap_active`, `starter_platforms_overage`,
- * `plan_inactive`) are preserved — gating is a render-time concern.
+ *   - **Can generate** — render `<GenerateForm />` directly (theme +
+ *     important-thing + length picker). The form's submit button reads
+ *     "Create new posts" and is the only primary CTA on the page.
+ *   - **Trial used** — render `<CreateTrialButton />`, a single "Create
+ *     new posts" button that opens a click-time `<TrialUpgradeDialog />`
+ *     instead of triggering generation. Replaces the previous full-page
+ *     `<TrialGatedScreen />` (which also carried a "Review the batch you
+ *     made" link that the redesign explicitly removed).
+ *   - **Pro / Starter at cap, overage, inactive plan** — `<QuotaGatedScreen />`
+ *     continues to handle these as a focal card. A future iteration can
+ *     replace them with click-time Dialogs to match the trial behavior;
+ *     out of scope for Wave 3 per the user's redesign brief.
+ *
+ * Stats (Posts Created · Posts Scheduled · Connected Accounts) live on
+ * `/settings` (`<ActivityStatsSection />`), not here.
  *
  * Placeholder personalisation reads the profile's `websiteAnalysis` blob
  * (populated during onboarding) for `suggestedTopics` /
@@ -44,107 +47,90 @@ export default async function CreatePage() {
     session.user.id,
   );
 
-  // Wave 1 of the redesign removed the cards list, so `capacityTooltip`
-  // (the disabled-button tooltip for the now-gone top button) and
-  // `deleteWarning` (passed to the cards) are no longer derived here.
-  // `belowSlot` is the form-OR-gated-screen rendered under the header;
-  // `canStartNew` controls whether the form is rendered at all.
-  let belowSlot: React.ReactNode;
-  let canStartNew = false;
-
-  // Gate (D20): trial + any batch (incl. cancelled) → upgrade screen.
+  // Trial-used branch (D20). Surface the upgrade Dialog on click rather
+  // than a page-wall — the redesign treats trial-used users as first-class
+  // visitors who see the same shell as everyone else.
   if (subscription.status === "trial") {
     const mostRecent = await postService.getMostRecentBatch(session.user.id);
     if (mostRecent) {
-      belowSlot = (
-        <TrialGatedScreen
-          existingBatchId={mostRecent.id}
-          batchStatus={mostRecent.status}
-        />
+      return (
+        <div className="max-w-3xl mx-auto space-y-12">
+          <header>
+            <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+              Create Posts
+            </h1>
+          </header>
+          <div className="flex justify-center">
+            <CreateTrialButton />
+          </div>
+        </div>
       );
     }
   }
 
-  // Paid-user gate (Phase 3 task-07). The trial branch above handles the
+  // Paid-user gate (Phase 3). The trial branch above handles the
   // cancelled-recoverable nuance that `<QuotaGatedScreen />` deliberately
-  // doesn't replicate, so canGenerate only fires for non-trial users here.
-  // The 4-reason union (D13) maps 1:1 to the QuotaGatedScreen variants;
+  // doesn't replicate, so `canGenerate` only fires for non-trial users
+  // here. The five-reason union maps 1:1 to the QuotaGatedScreen variants;
   // `trial_batch_exists` is unreachable in this position but kept in the
-  // switch for exhaustiveness so a future canGenerate change can't
+  // switch for exhaustiveness so a future `canGenerate` change can't
   // silently fall through.
-  if (!belowSlot) {
-    const gate = await subscriptionService.canGenerate(session.user.id);
-    if (!gate.allowed) {
-      switch (gate.reason) {
-        case "weekly_cap_active":
-          belowSlot = (
-            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
-          );
-          break;
-        case "monthly_cap_active":
-          // Temporary: reuses the weekly_cap_active "quota" variant so the
-          // wave compiles. Task 13 (Wave 4) introduces a dedicated
-          // `variant="monthly_quota"` with the 4-of-4-batches copy + the
-          // `batchesUsed` field; swap this arm there.
-          belowSlot = (
-            <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
-          );
-          break;
-        case "starter_platforms_overage":
-          belowSlot = (
-            <QuotaGatedScreen
-              variant="overage"
-              currentCount={gate.currentCount}
-            />
-          );
-          break;
-        case "plan_inactive":
-          belowSlot = <QuotaGatedScreen variant="inactive" />;
-          break;
-        case "trial_batch_exists":
-          // Unreachable — the explicit trial branch above already set
-          // belowSlot. Kept in the switch for exhaustiveness so a future
-          // canGenerate change can't silently fall through.
-          break;
-      }
-    } else {
-      canStartNew = true;
-      const profile = await profileService.getProfile(session.user.id);
-      const themePlaceholder = computeThemePlaceholder(profile);
-      const importantThingPlaceholder =
-        computeImportantThingPlaceholder(profile);
-      belowSlot = (
-        <CreateHubFormSlot
-          themePlaceholder={themePlaceholder}
-          importantThingPlaceholder={importantThingPlaceholder}
-          hasProFeatures={subscriptionService.hasProFeatures(subscription)}
-        />
-      );
+  const gate = await subscriptionService.canGenerate(session.user.id);
+  let belowSlot: React.ReactNode;
+  if (!gate.allowed) {
+    switch (gate.reason) {
+      case "weekly_cap_active":
+        belowSlot = (
+          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+        );
+        break;
+      case "monthly_cap_active":
+        // Temporary: reuses the weekly_cap_active "quota" variant so the
+        // wave compiles. Task 13 (Wave 4) introduces a dedicated
+        // `variant="monthly_quota"` with the 4-of-4-batches copy + the
+        // `batchesUsed` field; swap this arm there.
+        belowSlot = (
+          <QuotaGatedScreen variant="quota" nextResetAt={gate.nextResetAt} />
+        );
+        break;
+      case "starter_platforms_overage":
+        belowSlot = (
+          <QuotaGatedScreen
+            variant="overage"
+            currentCount={gate.currentCount}
+          />
+        );
+        break;
+      case "plan_inactive":
+        belowSlot = <QuotaGatedScreen variant="inactive" />;
+        break;
+      case "trial_batch_exists":
+        // Unreachable — the trial branch above already returned.
+        break;
     }
+  } else {
+    const profile = await profileService.getProfile(session.user.id);
+    const themePlaceholder = computeThemePlaceholder(profile);
+    const importantThingPlaceholder =
+      computeImportantThingPlaceholder(profile);
+    belowSlot = (
+      <GenerateForm
+        themePlaceholder={themePlaceholder}
+        importantThingPlaceholder={importantThingPlaceholder}
+        hasProFeatures={subscriptionService.hasProFeatures(subscription)}
+      />
+    );
   }
-
-  const daysLeft = subscription.daysLeftInTrial;
-  const showTrialNote =
-    subscription.status === "trial" && daysLeft !== null && daysLeft > 0;
-
-  // Wave 1 redesign: the cards list is gone, so the form is always
-  // expanded by default when allowed (gated paths render their gate
-  // screen in `belowSlot` instead and ignore this flag).
-  const initiallyExpanded = canStartNew;
 
   return (
-    <CreateHubFormProvider initiallyExpanded={initiallyExpanded}>
-      <div className="max-w-3xl mx-auto space-y-12">
-        <header className="space-y-3">
-          <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
-            Create Posts
-          </h1>
-          {showTrialNote ? <TrialNote daysLeft={daysLeft} /> : null}
-        </header>
-
-        {belowSlot}
-      </div>
-    </CreateHubFormProvider>
+    <div className="max-w-3xl mx-auto space-y-12">
+      <header>
+        <h1 className="font-fraunces text-3xl sm:text-4xl tracking-tight font-medium">
+          Create Posts
+        </h1>
+      </header>
+      {belowSlot}
+    </div>
   );
 }
 
@@ -242,8 +228,3 @@ function businessTypeImportantDefault(type: string | undefined): string {
       return "e.g. the angle that makes this week worth posting about";
   }
 }
-
-// Wave 1: `deriveDeleteWarning` moved to `/schedule-posts/page.tsx`
-// where the cards (and their delete-forever trigger) now live. Wave 3's
-// `/create` rebuild may re-introduce a similar helper if the new surface
-// needs tier-aware copy context — unknown at the time of Wave 1.

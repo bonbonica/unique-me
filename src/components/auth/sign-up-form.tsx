@@ -72,7 +72,7 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
         name,
         email,
         password,
-        callbackURL: "/dashboard",
+        callbackURL: "/create",
       })
 
       if (result.error) {
@@ -83,7 +83,7 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
           const signInResult = await signIn.email({
             email,
             password,
-            callbackURL: "/dashboard",
+            callbackURL: "/create",
           })
 
           if (signInResult.error) {
@@ -116,7 +116,7 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
           toast.success(
             "Welcome back — you already had an account, signed you in."
           )
-          router.push("/dashboard")
+          router.push("/create")
           router.refresh()
           return
         }
@@ -126,7 +126,7 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
           text: result.error.message || "Could not create your account.",
         })
       } else {
-        router.push("/dashboard")
+        router.push("/create")
         router.refresh()
       }
     } catch {
@@ -143,7 +143,7 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
     <div className="w-full space-y-6">
       {showGoogle && (
         <>
-          <GoogleSignInButton callbackURL="/dashboard" />
+          <GoogleSignInButton callbackURL="/create" />
           <div className="relative">
             <Separator />
             <span className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-card px-3 text-xs text-muted-foreground">

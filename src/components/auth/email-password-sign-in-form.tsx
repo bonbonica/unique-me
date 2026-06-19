@@ -30,7 +30,7 @@ export function EmailPasswordSignInForm() {
       const result = await signIn.email({
         email,
         password,
-        callbackURL: "/dashboard",
+        callbackURL: "/create",
       })
 
       if (result.error) {
@@ -38,7 +38,7 @@ export function EmailPasswordSignInForm() {
       } else {
         // Use both push + refresh so server components re-render with the new
         // session cookie on the destination route.
-        router.push("/dashboard")
+        router.push("/create")
         router.refresh()
       }
     } catch {

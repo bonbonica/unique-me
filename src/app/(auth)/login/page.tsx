@@ -32,7 +32,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const session = await auth.api.getSession({ headers: await headers() })
 
   if (session) {
-    redirect("/dashboard")
+    redirect("/create")
   }
 
   const { reset } = await searchParams
@@ -63,7 +63,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <div className="mt-8 space-y-6">
           {googleEnabled && (
             <>
-              <GoogleSignInButton callbackURL="/dashboard" />
+              <GoogleSignInButton callbackURL="/create" />
               {/* Centered "or" overlay sits on top of a horizontal Separator
                   so it reads as a label rather than an interruption. The
                   bg-card class matches the Card surface beneath so the line

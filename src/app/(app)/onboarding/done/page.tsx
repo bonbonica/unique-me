@@ -46,7 +46,7 @@ export default async function OnboardingDonePage() {
           size="lg"
           className="rounded-full glow-champagne mt-4"
         >
-          <Link href="/dashboard">Create My First Posts</Link>
+          <Link href="/create">Create My First Posts</Link>
         </Button>
       </div>
     </div>

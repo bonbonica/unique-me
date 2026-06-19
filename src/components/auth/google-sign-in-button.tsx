@@ -9,7 +9,7 @@ type GoogleSignInButtonProps = {
 }
 
 export function GoogleSignInButton({
-  callbackURL = "/dashboard",
+  callbackURL = "/create",
 }: GoogleSignInButtonProps) {
   const [error, setError] = useState("")
   const [isPending, setIsPending] = useState(false)

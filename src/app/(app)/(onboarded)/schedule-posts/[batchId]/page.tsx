@@ -17,9 +17,9 @@ import { postService, subscriptionService } from "@/lib/services";
  *  - `cancelled` → {@link NetworkWizard mode="cancelled"} (cancelled-
  *    recoverable flow; user can re-edit + re-schedule within trial window).
  *  - `scheduling` → {@link LockedSummary} (read-only; stop-batch action).
- *  - `scheduled` / `completed` → bounce to `/dashboard` (Wave 3 task-08
- *    deletes `/dashboard` and switches root to `/create`; until then the
- *    legacy target stays so behaviour matches the old `/posts` route).
+ *  - `scheduled` / `completed` → bounce to `/create` (no dedicated view
+ *    for these statuses yet; the redirect parks the user back at the new
+ *    home rather than letting them sit on an unrendered status page).
  *  - `in_progress` / unknown → bounce to `/create` (stale state).
  */
 type Params = Promise<{ batchId: string }>;
@@ -61,7 +61,7 @@ export default async function SchedulePostsDetailPage({
       return <LockedSummary data={data} />;
     case "scheduled":
     case "completed":
-      return redirect("/dashboard");
+      return redirect("/create");
     case "in_progress":
       return redirect("/create");
     default:

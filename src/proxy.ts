@@ -11,7 +11,7 @@ import { getSessionCookie } from "better-auth/cookies";
  *   request cookies. The decisions are intentionally optimistic — a forged
  *   `uniqueme:has-profile` cookie would only get the user past the gate to a
  *   page that does its own `auth.api.getSession()` + `profileService.hasProfile()`
- *   check (e.g. `/dashboard` will redirect to `/onboarding` if the profile is
+ *   check (e.g. `/create` will redirect to `/onboarding` if the profile is
  *   actually missing). Server pages remain the source of truth; the cookie is
  *   a fast-path hint.
  *
@@ -30,17 +30,18 @@ import { getSessionCookie } from "better-auth/cookies";
  * sent to `/login` before they ever see the form.
  */
 const PROTECTED_PREFIXES = [
-  "/dashboard",
-  "/posts",
-  "/library",
+  "/create",
+  "/schedule-posts",
   "/posting-soon",
+  "/cancelled-posts",
+  "/library",
   "/settings",
   "/onboarding",
 ] as const;
 
 const AUTH_REDIRECT = "/login";
 const ONBOARDING = "/onboarding";
-const DASHBOARD = "/dashboard";
+const HOME = "/create";
 
 /**
  * Cookie set by `saveOnboardingAction` after a successful profile save. Read
@@ -98,10 +99,10 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
 
   if (isOnboardingPath(pathname)) {
     // Onboarded users don't need to see the onboarding flow again. Bounce
-    // them to the dashboard so the `(app)/onboarding/page.tsx` server check
-    // doesn't have to do the redirect itself on every visit.
+    // them to the new home (`/create`) so the `(app)/onboarding/page.tsx`
+    // server check doesn't have to do the redirect itself on every visit.
     if (hasProfile) {
-      return NextResponse.redirect(new URL(DASHBOARD, request.url));
+      return NextResponse.redirect(new URL(HOME, request.url));
     }
     return NextResponse.next();
   }
@@ -123,10 +124,11 @@ export async function proxy(request: NextRequest): Promise<NextResponse> {
  */
 export const config = {
   matcher: [
-    "/dashboard/:path*",
-    "/posts/:path*",
-    "/library/:path*",
+    "/create/:path*",
+    "/schedule-posts/:path*",
     "/posting-soon/:path*",
+    "/cancelled-posts/:path*",
+    "/library/:path*",
     "/settings/:path*",
     "/onboarding/:path*",
   ],

@@ -1,4 +1,5 @@
 import { headers } from "next/headers";
+import { ActivityStatsSection } from "@/components/settings/activity-stats-section";
 import { PlanSection } from "@/components/settings/plan-section";
 import { PostingDaysSection } from "@/components/settings/posting-days-section";
 import { auth } from "@/lib/auth";
@@ -47,6 +48,8 @@ export default async function SettingsPage() {
           Profile, connected accounts, subscription, and notifications.
         </p>
       </header>
+
+      <ActivityStatsSection userId={session.user.id} />
 
       <PlanSection
         plan={subscription.plan}

@@ -11,7 +11,7 @@ import { profileService, subscriptionService } from "@/lib/services";
  * before reaching this route, but we still re-verify here for two reasons —
  * (1) the cookie is only a fast-path hint, (2) we need the actual `session.user`
  * to render the personalised greeting. If the user is already onboarded the
- * proxy will have redirected them to `/dashboard`; the second `hasProfile`
+ * proxy will have redirected them to `/create`; the second `hasProfile`
  * check is a defence-in-depth backstop for the case where the cookie was
  * cleared but the DB row still exists.
  *
@@ -29,11 +29,11 @@ export default async function OnboardingPage() {
   // If the DB says the user is already onboarded but the proxy let us in
   // anyway, the `uniqueme:has-profile` cookie is missing or stale. Route
   // through the cookie-sync handler so it gets set before we land on
-  // `/dashboard` — otherwise the proxy will redirect us straight back here
+  // `/create` — otherwise the proxy will redirect us straight back here
   // and loop.
   const has = await profileService.hasProfile(session.user.id);
   if (has) {
-    redirect("/api/internal/sync-profile?to=/dashboard");
+    redirect("/api/internal/sync-profile?to=/create");
   }
 
   // Phase 3 D6 (task-14): the onboarding platform picker enforces a max of
