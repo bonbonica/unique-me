@@ -38,3 +38,38 @@ export async function cancelBatchAction(
   revalidatePath("/create");
   return { ok: true };
 }
+
+/**
+ * Reopen a `scheduling` batch back to `reviewing` so the user can edit
+ * their selections without losing the work they already committed. Backs
+ * the "Edit selections" affordance on `/posting-soon/[batchId]` — see
+ * `postService.reopenForEditing` for the underlying transition contract.
+ *
+ * Returns the same `{ ok }` shape `cancelBatchAction` uses so the client
+ * trigger can render a single toast on failure. On success the client
+ * routes to `/schedule-posts/[batchId]` where the wizard takes over.
+ */
+export async function reopenBatchAction(
+  batchId: string,
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_scheduling" | "failed" }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
+  const result = await postService.reopenForEditing(batchId, session.user.id);
+
+  if (!result.ok) {
+    if (result.error === "not_scheduling") {
+      return { ok: false, error: "not_scheduling" };
+    }
+    return { ok: false, error: "failed" };
+  }
+
+  revalidatePath("/posting-soon");
+  revalidatePath(`/posting-soon/${batchId}`);
+  revalidatePath("/schedule-posts");
+  revalidatePath(`/schedule-posts/${batchId}`);
+  return { ok: true };
+}

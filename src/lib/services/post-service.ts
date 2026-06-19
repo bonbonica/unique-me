@@ -1657,6 +1657,72 @@ export async function stopBatch(
   }
 }
 
+/**
+ * Reopen a `scheduling` batch back to `reviewing` so the user can add to,
+ * remove from, or otherwise edit their `post_selections` and re-commit via
+ * {@link scheduleMyPick}. Implements the "Edit selections" affordance on
+ * `/posting-soon/[batchId]` (navigation-redesign post-Wave-3 fix).
+ *
+ * Status-guarded UPDATE is race-safe in the same way as `stopBatch` and
+ * `scheduleMyPick`. The only valid prior status is `"scheduling"`:
+ *  - `"reviewing"` → already editable; reopening would be a no-op.
+ *  - `"cancelled"` → use {@link reschedule} instead (recovery path).
+ *  - `"scheduled"` / `"completed"` → posts have already gone out (or are
+ *    about to); reopen would be a footgun. Returns `not_scheduling`.
+ *
+ * Does NOT touch `scheduled_posts`. Stage-1 has no writer for that table
+ * (BatchDetailView reads `post_selections` instead — see batch-detail-view.tsx
+ * top-of-file docblock). When Phase 7's writer ships, this function will
+ * likely need a sibling decision about whether to delete or flip the
+ * existing `scheduled_posts` rows so the next `scheduleMyPick` rewrites
+ * them cleanly; out of scope today.
+ */
+export async function reopenForEditing(
+  batchId: string,
+  sessionUserId: string
+): Promise<StopResult> {
+  const [batch] = await db
+    .select({
+      userId: weeklyBatches.userId,
+      status: weeklyBatches.status,
+    })
+    .from(weeklyBatches)
+    .where(eq(weeklyBatches.id, batchId))
+    .limit(1);
+
+  if (!batch) return { ok: false, error: "not_found" };
+  if (batch.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+  if (batch.status !== "scheduling") {
+    return { ok: false, error: "not_scheduling" };
+  }
+
+  try {
+    const updateResult = await db
+      .update(weeklyBatches)
+      .set({ status: "reviewing" })
+      .where(
+        and(
+          eq(weeklyBatches.id, batchId),
+          eq(weeklyBatches.status, "scheduling")
+        )
+      )
+      .returning({ id: weeklyBatches.id });
+
+    if (updateResult.length === 0) {
+      // Race: a sibling tab flipped status between the pre-flight read and
+      // this UPDATE. 0-row match is a no-op; surface as the same code
+      // `stopBatch` uses for the equivalent race.
+      return { ok: false, error: "not_scheduling" };
+    }
+    return { ok: true, batchId };
+  } catch (err) {
+    console.error("[postService.reopenForEditing]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
 // =============================================================================
 // Per-post Cancel / Restore (D-S2-6, D-S2-7, D-S2-21 — non-destructive status
 // flips on `scheduled_posts`). See the Cancel-vs-Delete contract at §0 of the
