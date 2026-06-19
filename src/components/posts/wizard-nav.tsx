@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -7,9 +8,11 @@ import { Button } from "@/components/ui/button";
  * Back / Next navigation footer used by {@link NetworkWizard}.
  *
  * - Back is disabled on step 1.
- * - Next is hidden on the summary step entirely — the summary renders its
- *   own primary "Schedule my pick" action via {@link WizardSummary}, so a
- *   Next button would be redundant.
+ * - On steps 1..N-1: renders Next on the right.
+ * - On the summary step: renders `summaryAction` on the right if provided
+ *   (the parent passes the "Schedule my pick" button so the commit CTA
+ *   sits in the same top-right slot as Next on prior steps). If
+ *   `summaryAction` is omitted, the right side is empty.
  *
  * Selection state is DB-backed via `post_selections`, so navigating
  * back-and-forth doesn't lose any user input.
@@ -19,12 +22,14 @@ export function WizardNav({
   isSummary,
   onBack,
   onNext,
+  summaryAction,
 }: {
   stepIndex: number;
   totalSteps: number;
   isSummary: boolean;
   onBack: () => void;
   onNext: () => void;
+  summaryAction?: ReactNode;
 }) {
   return (
     <div className="flex items-center justify-between border-t border-border pt-6">
@@ -39,12 +44,14 @@ export function WizardNav({
         Back
       </Button>
 
-      {!isSummary ? (
+      {isSummary ? (
+        summaryAction ?? null
+      ) : (
         <Button type="button" onClick={onNext} className="gap-2">
           Next
           <ArrowRight className="size-4" aria-hidden />
         </Button>
-      ) : null}
+      )}
     </div>
   );
 }

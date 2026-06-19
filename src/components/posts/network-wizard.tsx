@@ -1,18 +1,30 @@
 "use client";
 
 import { useEffect, useRef, useState, useTransition } from "react";
-import { Check } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Check, CheckSquare, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   deselectForNetworkAction,
   getBatchImageStatusesAction,
   regenerateImageAction,
+  rescheduleAction,
   retryImageAction,
+  scheduleMyPickAction,
   selectForNetworkAction,
 } from "@/app/(app)/(onboarded)/posts/actions";
 import { WizardNav } from "@/components/posts/wizard-nav";
 import { WizardStep } from "@/components/posts/wizard-step";
 import { WizardSummary } from "@/components/posts/wizard-summary";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   dayWindowOrFallback,
   postingDaysOrFallback,
@@ -204,6 +216,25 @@ export function NetworkWizard({
   // Always deleted after the transition fires, success or fail, so the Map
   // stays bounded by concurrent in-flight regenerates (max ~9 tiles).
   const regenerateSnapshotsRef = useRef<Map<string, string>>(new Map());
+
+  // Schedule state lifted up from <WizardSummary /> so the commit button
+  // can render inside <WizardNav /> at the top-right corner — the same
+  // slot Next occupies on steps 1..N-1. <WizardSummary /> below is now a
+  // pure presentation of the selected cards; this section owns the
+  // submitting / error / disclaimer surface that previously lived inside
+  // the summary's own button blocks. Declared next to the other top-level
+  // hooks so we satisfy the rules-of-hooks invariant — the
+  // `platforms.length === 0` early-return below sits AFTER all hook
+  // calls.
+  const router = useRouter();
+  const [scheduleSubmitting, setScheduleSubmitting] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+  // One-time disclaimer fired at whole-batch scheduling completion (the
+  // reviewing → scheduling OR cancelled → scheduling transition). Opens
+  // once when the action returns ok; the router.refresh() that flips the
+  // page to <LockedSummary /> is deferred until the user dismisses the
+  // dialog. NOT per-post — only at this one batch-level transition.
+  const [disclaimerOpen, setDisclaimerOpen] = useState(false);
 
   // Wave 2 polling-restart fix: derived from the CURRENT `images` state, not
   // the initial SSR `data.images`. When a user clicks retry/regenerate AFTER
@@ -470,6 +501,58 @@ export function NetworkWizard({
     (p) => selections[p].length > 0
   );
 
+  // Schedule labels derived from mode. State for submitting / error /
+  // disclaimer is declared with the other hooks above so we stay on the
+  // safe side of the `platforms.length === 0` early return.
+  const isCancelled = mode === "cancelled";
+  const ctaText = isCancelled ? "Schedule" : "Schedule my pick";
+  const totalSelectionCount =
+    selections.facebook.length +
+    selections.instagram.length +
+    selections.linkedin.length;
+  const isEmpty = totalSelectionCount === 0;
+
+  async function handleSchedule() {
+    setScheduleSubmitting(true);
+    setScheduleError(null);
+    const result = isCancelled
+      ? await rescheduleAction(data.batch.id)
+      : await scheduleMyPickAction(data.batch.id);
+    if (result.ok) {
+      setDisclaimerOpen(true);
+    } else {
+      setScheduleError(scheduleErrorCopy(result.error));
+      setScheduleSubmitting(false);
+    }
+  }
+
+  function handleDisclaimerClose(next: boolean) {
+    if (next) return;
+    setDisclaimerOpen(false);
+    router.refresh();
+  }
+
+  const scheduleButton = isSummary ? (
+    <Button
+      type="button"
+      onClick={handleSchedule}
+      disabled={scheduleSubmitting || isEmpty}
+      className="gap-2 rounded-full glow-champagne"
+    >
+      {scheduleSubmitting ? (
+        <>
+          <Loader2 className="animate-spin size-4" aria-hidden />
+          Scheduling…
+        </>
+      ) : (
+        <>
+          <CheckSquare className="size-4" aria-hidden />
+          {ctaText}
+        </>
+      )}
+    </Button>
+  ) : null;
+
   return (
     <div className="max-w-5xl mx-auto space-y-8">
       <WizardHeader
@@ -492,7 +575,16 @@ export function NetworkWizard({
         isSummary={isSummary}
         onBack={onBack}
         onNext={onNext}
+        summaryAction={scheduleButton}
       />
+
+      {/* Inline schedule error renders directly under the top nav so the
+          user sees feedback near the button that triggered it. */}
+      {isSummary && scheduleError ? (
+        <p role="alert" className="text-destructive text-sm">
+          {scheduleError}
+        </p>
+      ) : null}
 
       {currentPlatform ? (
         <WizardStep
@@ -533,9 +625,50 @@ export function NetworkWizard({
         isSummary={isSummary}
         onBack={onBack}
         onNext={onNext}
+        summaryAction={scheduleButton}
       />
+
+      {/* One-time disclaimer fired at the reviewing → scheduling OR
+          cancelled → scheduling transition. Dismissing it triggers the
+          deferred router.refresh() that flips the page to
+          <LockedSummary />. */}
+      <Dialog open={disclaimerOpen} onOpenChange={handleDisclaimerClose}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-fraunces text-2xl tracking-tight font-medium">
+              Check your posts regularly
+            </DialogTitle>
+          </DialogHeader>
+          <DialogDescription className="text-base leading-7 text-muted-foreground">
+            Social media partners occasionally update their systems, which
+            may affect automated publishing.
+          </DialogDescription>
+          <DialogFooter>
+            <Button onClick={() => handleDisclaimerClose(false)}>
+              Got it
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
+}
+
+function scheduleErrorCopy(err: string): string {
+  switch (err) {
+    case "no_selections":
+      return "Pick at least one post-network combination first.";
+    case "batch_already_locked":
+      return "This batch is already scheduled or cancelled.";
+    case "not_owned":
+      return "You don't have access to this batch.";
+    case "not_found":
+      return "Batch not found.";
+    case "db_failed":
+      return "Couldn't save your selections. Try again.";
+    default:
+      return "Something went wrong. Try again.";
+  }
 }
 
 /**

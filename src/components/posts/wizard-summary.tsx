@@ -1,12 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { CheckSquare, Loader2, X } from "lucide-react";
-import {
-  rescheduleAction,
-  scheduleMyPickAction,
-} from "@/app/(app)/(onboarded)/posts/actions";
+import { X } from "lucide-react";
 import { DayLabel } from "@/components/posts/day-label";
 import { EditDialog } from "@/components/posts/edit-dialog";
 import {
@@ -20,14 +14,6 @@ import {
 } from "@/components/posts/network-preview";
 import { PostTileImage } from "@/components/posts/post-tile-image";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   dayWindowOrFallback,
   postingDaysOrFallback,
@@ -45,11 +31,11 @@ import type {
  *   1. Headline + subhead make it unambiguous this is the
  *      point-of-no-return ("Last step before your posts go live. Confirm
  *      to schedule.").
- *   2. The Schedule button is placed UP TOP, right under the subhead, so
- *      a user who's already happy with their picks doesn't have to scroll
- *      past a long card grid to find the commit action. A second copy of
- *      the button sits at the bottom of the grid as a convenience for
- *      long lists.
+ *   2. The Schedule button is rendered by {@link NetworkWizard} in the
+ *      top-right slot of the surrounding {@link WizardNav} — the same
+ *      position Next occupies on steps 1..N-1. This component is now
+ *      pure presentation of the selected cards; it owns no schedule
+ *      state.
  *   3. Selection items render as full cards matching the per-network step
  *      style (rounded-2xl, p-6, shadow-soft, same aspect-ratio image
  *      placeholder, same caption + hashtag layout). They feel like the
@@ -127,27 +113,14 @@ export function WizardSummary({
 }) {
   const isCancelled = mode === "cancelled";
 
-  // Copy + action swap drives the only differences between reviewing and
-  // cancelled-recoverable summary screens. Cards above the buttons render
-  // identically.
+  // Copy swap drives the only difference between reviewing and
+  // cancelled-recoverable summary screens. Cards render identically.
   const headlineText = isCancelled
     ? "Re-schedule your week"
     : "Last step before your posts go live";
   const subheadText = isCancelled
     ? "Confirm to bring this batch back to scheduled."
     : "Confirm to schedule.";
-  const ctaText = isCancelled ? "Schedule" : "Schedule my pick";
-  const submittingText = "Scheduling…";
-  const router = useRouter();
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // One-time disclaimer popup fired at whole-batch scheduling completion
-  // (the reviewing → scheduling OR cancelled → scheduling transition).
-  // Opens once when the schedule/reschedule action returns ok; the
-  // router.refresh() that flips the page to <LockedSummary /> is deferred
-  // until the user dismisses the dialog. NOT per-post, NOT per checkbox
-  // toggle — only at this one batch-level transition point.
-  const [disclaimerOpen, setDisclaimerOpen] = useState(false);
 
   // Flatten lifted selections into a flat list of (post, platform) pairs.
   // Filtered to platforms in profile.platforms so a leftover row from a
@@ -175,35 +148,6 @@ export function WizardSummary({
     onSetSelection(item.post.id, item.platform, false);
   }
 
-  async function handleSchedule() {
-    setSubmitting(true);
-    setError(null);
-    const result = isCancelled
-      ? await rescheduleAction(batch.id)
-      : await scheduleMyPickAction(batch.id);
-    if (result.ok) {
-      // batch.status flips to "scheduling" from either source state.
-      // Show the one-time disclaimer; the router.refresh() that flips the
-      // page to <LockedSummary /> happens on dismiss (handleDisclaimerClose
-      // below). The success branch never falls through to a refresh
-      // directly — the dialog is the gate.
-      setDisclaimerOpen(true);
-    } else {
-      setError(scheduleErrorCopy(result.error));
-      setSubmitting(false);
-    }
-  }
-
-  // Single close handler covers all dismiss paths (the Got it button, Esc,
-  // outside-click). Closes the dialog and only then refreshes — guarantees
-  // the disclaimer is acknowledged once before the locked-summary view
-  // renders.
-  function handleDisclaimerClose(next: boolean) {
-    if (next) return;
-    setDisclaimerOpen(false);
-    router.refresh();
-  }
-
   return (
     <section className="space-y-8">
       <header className="space-y-2">
@@ -213,124 +157,31 @@ export function WizardSummary({
         <p className="text-sm text-muted-foreground">{subheadText}</p>
       </header>
 
-      {/* Primary commit placement — directly below the subhead so the
-          action is visible without scrolling past the card grid. */}
-      <div className="space-y-3">
-        <ScheduleButton
-          onClick={handleSchedule}
-          disabled={submitting || isEmpty}
-          submitting={submitting}
-          label={ctaText}
-          submittingLabel={submittingText}
-        />
-        {error ? (
-          <p role="alert" className="text-destructive text-sm">
-            {error}
-          </p>
-        ) : null}
-        {isEmpty ? (
-          <p className="text-sm text-muted-foreground italic">
-            Nothing to schedule yet. Go back to any network step to pick
-            posts.
-          </p>
-        ) : null}
-      </div>
-
-      {!isEmpty ? (
-        <>
-          <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {items.map((item) => (
-              <SummaryCard
-                key={`${item.post.id}:${item.platform}`}
-                item={item}
-                batchCreatedAt={batch.createdAt}
-                totalPosts={batch.totalPosts}
-                dayWindow={dayWindowOrFallback(batch)}
-                postingDays={postingDaysOrFallback(batch)}
-                onRemove={() => handleRemove(item)}
-                image={images[item.post.id]}
-                onImageRetry={onImageRetry}
-                isPro={isPro}
-                onImageRegenerate={onImageRegenerate}
-              />
-            ))}
-          </ul>
-
-          {/* Convenience copy at the bottom for long lists. Same handler
-              as the top button — both share submitting/error state. */}
-          <div className="flex justify-end border-t border-border pt-6">
-            <ScheduleButton
-              onClick={handleSchedule}
-              disabled={submitting || isEmpty}
-              submitting={submitting}
-              label={ctaText}
-              submittingLabel={submittingText}
-            />
-          </div>
-        </>
-      ) : null}
-
-      {/* One-time disclaimer fired at whole-batch scheduling completion
-          (the reviewing → scheduling OR cancelled → scheduling transition).
-          Opens once when handleSchedule succeeds; dismissing it triggers
-          the deferred router.refresh() that flips the page to
-          <LockedSummary />. NOT per-post, NOT per checkbox toggle — only
-          here at this one transition point. */}
-      <Dialog open={disclaimerOpen} onOpenChange={handleDisclaimerClose}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle className="font-fraunces text-2xl tracking-tight font-medium">
-              Check your posts regularly
-            </DialogTitle>
-          </DialogHeader>
-          <DialogDescription className="text-base leading-7 text-muted-foreground">
-            Social media partners occasionally update their systems, which
-            may affect automated publishing.
-          </DialogDescription>
-          <DialogFooter>
-            <Button onClick={() => handleDisclaimerClose(false)}>
-              Got it
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </section>
-  );
-}
-
-function ScheduleButton({
-  onClick,
-  disabled,
-  submitting,
-  label,
-  submittingLabel,
-}: {
-  onClick: () => void;
-  disabled: boolean;
-  submitting: boolean;
-  label: string;
-  submittingLabel: string;
-}) {
-  return (
-    <Button
-      type="button"
-      size="lg"
-      className="rounded-full glow-champagne self-start"
-      onClick={onClick}
-      disabled={disabled}
-    >
-      {submitting ? (
-        <>
-          <Loader2 className="animate-spin size-4 mr-2" aria-hidden />
-          {submittingLabel}
-        </>
+      {isEmpty ? (
+        <p className="text-sm text-muted-foreground italic">
+          Nothing to schedule yet. Go back to any network step to pick
+          posts.
+        </p>
       ) : (
-        <>
-          <CheckSquare className="size-4 mr-2" aria-hidden />
-          {label}
-        </>
+        <ul className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {items.map((item) => (
+            <SummaryCard
+              key={`${item.post.id}:${item.platform}`}
+              item={item}
+              batchCreatedAt={batch.createdAt}
+              totalPosts={batch.totalPosts}
+              dayWindow={dayWindowOrFallback(batch)}
+              postingDays={postingDaysOrFallback(batch)}
+              onRemove={() => handleRemove(item)}
+              image={images[item.post.id]}
+              onImageRetry={onImageRetry}
+              isPro={isPro}
+              onImageRegenerate={onImageRegenerate}
+            />
+          ))}
+        </ul>
       )}
-    </Button>
+    </section>
   );
 }
 
@@ -411,21 +262,4 @@ function SummaryCard({
       </div>
     </li>
   );
-}
-
-function scheduleErrorCopy(err: string): string {
-  switch (err) {
-    case "no_selections":
-      return "Pick at least one post-network combination first.";
-    case "batch_already_locked":
-      return "This batch is already scheduled or cancelled.";
-    case "not_owned":
-      return "You don't have access to this batch.";
-    case "not_found":
-      return "Batch not found.";
-    case "db_failed":
-      return "Couldn't save your selections. Try again.";
-    default:
-      return "Something went wrong. Try again.";
-  }
 }
