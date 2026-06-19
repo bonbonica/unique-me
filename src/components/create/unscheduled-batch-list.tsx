@@ -67,8 +67,8 @@ export function UnscheduledBatchList({
           </Button>
         )}
         <Button variant="outline" asChild>
-          <Link href="/schedule">
-            See scheduled posts
+          <Link href="/posting-soon">
+            See posts scheduled to publish
             <ArrowRight
               className="ml-1 size-4"
               strokeWidth={1.5}

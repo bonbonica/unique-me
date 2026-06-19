@@ -4,7 +4,6 @@ import { after } from "next/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
 import { db } from "@/lib/db";
-import { MAX_BATCHES_PER_PERIOD } from "@/lib/pricing";
 import {
   resolveBatchPlan,
   resolveLengthsForBatch,
@@ -203,21 +202,21 @@ export type UnscheduledBatchCard = {
 };
 
 /**
- * Box-shaped data for a single "current period" batch on the Scheduled page.
- * Returned inside {@link ScheduledView.current} by
+ * Box-shaped data for a single "current period" batch on the Posting Soon
+ * page. Returned inside {@link ScheduledView.current} by
  * {@link getScheduledViewForUser}; consumed by `<ScheduledBatchBox />`.
  *
- * Stage-1 dormant contract — three fields ride along today as safe defaults
- * but will activate when Phase 4 (`scheduleService`) and Phase 7
- * (`postingService`) ship without any component changes:
- *  - `derivedState`: always `"upcoming"` in Stage-1. Phase 4 flips it to
- *    `"currently_posting"` when `scheduled_posts` rows exist for the batch
- *    with `status='posted'` AND at least one row is still `status='pending'`
- *    with `scheduledTime > now()`.
+ * Stage-1 dormant contract — two fields ride along today as safe defaults
+ * but will activate when Phase 7 (`postingService`) ships without any
+ * component changes:
  *  - `alreadyPostedCount`: always `0` in Stage-1. Phase 7 populates with
  *    `COUNT(scheduled_posts.status='posted')` per batch.
  *  - `queuedCount`: always equal to `totalPosts` in Stage-1. Phase 7 sets it
  *    to `totalPosts - alreadyPostedCount`.
+ *
+ * The previous `derivedState` field (with a dormant `"currently_posting"`
+ * member) was removed by the navigation redesign — the "Currently Posting"
+ * concept is gone from the IA.
  */
 export type BatchBoxData = {
   id: string;
@@ -241,8 +240,6 @@ export type BatchBoxData = {
    */
   totalPosts: number;
   counts: { facebook: number; instagram: number; linkedin: number };
-  // Stage-1 dormant: see type-level docblock above.
-  derivedState: "upcoming" | "currently_posting";
   // Stage-1 dormant: see type-level docblock above.
   alreadyPostedCount: number;
   // Stage-1 dormant: see type-level docblock above.
@@ -356,12 +353,6 @@ export async function getCurrentBatch(
  *
  * `completed` is excluded (Phase 4 owns that surface) and `in_progress` is
  * excluded (stale/unreachable status; defensive).
- *
- * **Not** used by the `<CurrentlyPostingCta />` on `/create` — that path
- * resolves the OLDEST `scheduling | completed` batch via
- * {@link getCurrentlyPostingBatch} so the "currently posting" framing
- * lands on the batch whose schedule window fires first, not whichever was
- * most recently created.
  */
 export async function getResumableBatch(
   userId: string
@@ -386,104 +377,6 @@ export async function getResumableBatch(
     .limit(1);
 
   return batch ?? null;
-}
-
-/**
- * Resolves "the batch currently posting on the user's social media" — the
- * target for `/create`'s `<CurrentlyPostingCta />` button.
- *
- * **Pro semantics — time-based (the corrected logic).** The Pro plan
- * structure is 4 batches across a 30-day period, one batch per
- * (approximately) one-week window. The batch with `batchOrdinalInPeriod
- * = N` is intended to post during week N of the period. So "currently
- * posting" = the batch whose ordinal matches the *current* period week:
- *
- *   periodWeek = clamp(1, floor((now - periodStart) / 7d) + 1, 4)
- *   batch where batchOrdinalInPeriod = periodWeek (any status)
- *
- * Status-agnostic on purpose: a `completed` batch in week 1 is still
- * "the one that posted during week 1"; a `reviewing` batch in week 2 is
- * "the one that should be posting now but the user hasn't scheduled
- * yet". Either is the right answer for the CTA's framing.
- *
- * Callers pass `periodStart` only for Pro users — derive it from
- * `subscription.proQuota.periodEndsAt - 30d` (subscription-service.ts:72
- * explicitly endorses this reconstruction; the snapshot doesn't carry
- * `currentPeriodStart` to keep the field count down).
- *
- * **Starter / Trial semantics — single-batch fallback.** Those plans
- * cap at 1 batch (lifetime for Trial; rolling 7-day window for Starter),
- * so the time-based week logic doesn't apply. Callers omit `periodStart`
- * and the helper returns the user's oldest `scheduling | completed`
- * batch (in practice, their only one).
- *
- * **Pro fallback when no batch matches the period week.** Could happen
- * if the user hasn't created their week-N batch yet — e.g., we're in
- * week 3 of the period and only batches 1, 2 exist. The helper falls
- * through to the same Starter-style "oldest `scheduling | completed`"
- * heuristic so the CTA still resolves to *something* the user might want
- * to look at, rather than returning null and degrading to bare `/posts`
- * → `getResumableBatch` (which would land on the newest reviewing batch,
- * the original bug). Final null only when the user has NO
- * scheduling/completed batches at all.
- *
- * **PRESENT-DAY vs FUTURE-STATE** (§5.3 amendment pattern). Today no
- * writer flips a batch to `in_progress` — Phase 7's posting cron is
- * deferred per spec §8. When the cron + status writer ships, this helper
- * can short-circuit on `eq(weeklyBatches.status, "in_progress")` before
- * the ordinal lookup, since the writer will be authoritative about
- * what's actually mid-posting. Until then, ordinal == periodWeek is the
- * best proxy for Pro and the FIFO heuristic is the best proxy for non-Pro.
- *
- * The sidebar's "My Posts" link still uses {@link getResumableBatch}
- * ("resume what you were last working on" = newest). The two helpers
- * answer different questions and must NOT be unified.
- */
-export async function getCurrentlyPostingBatch(
-  userId: string,
-  periodStart?: Date
-): Promise<WeeklyBatch | null> {
-  // Pro path: ordinal == periodWeek. Status-agnostic.
-  if (periodStart) {
-    const elapsedMs = Math.max(0, Date.now() - periodStart.getTime());
-    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-    const periodWeek = Math.min(
-      MAX_BATCHES_PER_PERIOD,
-      Math.floor(elapsedMs / WEEK_MS) + 1
-    );
-    const [byOrdinal] = await db
-      .select()
-      .from(weeklyBatches)
-      .where(
-        and(
-          eq(weeklyBatches.userId, userId),
-          eq(weeklyBatches.batchOrdinalInPeriod, periodWeek),
-          // Quota-soft-delete §4: tombstones never surface as "currently posting".
-          isNull(weeklyBatches.deletedAt)
-        )
-      )
-      .limit(1);
-    if (byOrdinal) return byOrdinal;
-    // Fall through to the FIFO heuristic when the period-week slot
-    // hasn't been filled yet.
-  }
-
-  // Starter / Trial path, or Pro fallback: oldest scheduling/completed.
-  const [oldest] = await db
-    .select()
-    .from(weeklyBatches)
-    .where(
-      and(
-        eq(weeklyBatches.userId, userId),
-        inArray(weeklyBatches.status, ["scheduling", "completed"]),
-        // Quota-soft-delete §4: tombstones never surface as "currently posting".
-        isNull(weeklyBatches.deletedAt)
-      )
-    )
-    .orderBy(asc(weeklyBatches.createdAt))
-    .limit(1);
-
-  return oldest ?? null;
 }
 
 /**
@@ -669,9 +562,9 @@ export async function getUnscheduledBatchesForUser(
  * as a network × day grid (D-S2-15), fed by an independent data path that is
  * not affected by this function.
  *
- * Stage-1 dormant fields (`derivedState`, `alreadyPostedCount`, `queuedCount`)
- * still default to the safe values documented on {@link BatchBoxData} — Phase
- * 4/7 will compute real values without touching this function's signature.
+ * Stage-1 dormant fields (`alreadyPostedCount`, `queuedCount`) still default
+ * to the safe values documented on {@link BatchBoxData} — Phase 7 will
+ * compute real values without touching this function's signature.
  *
  * Query plan (2 queries when batches exist; 1 when not):
  *  1. Top-4 batches by `createdAt DESC` filtered to `status IN ('scheduling',
@@ -738,8 +631,7 @@ export async function getScheduledViewForUser(
       instagram: 0,
       linkedin: 0,
     },
-    // Stage-1 dormant defaults unchanged — Phase 4/7 still owns the flip.
-    derivedState: "upcoming" as const,
+    // Stage-1 dormant defaults unchanged — Phase 7 still owns the flip.
     alreadyPostedCount: 0,
     queuedCount: r.totalPosts,
   }));

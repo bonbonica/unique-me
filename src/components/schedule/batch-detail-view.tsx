@@ -314,11 +314,11 @@ export function BatchDetailView(props: Props) {
     <div className="max-w-3xl mx-auto space-y-8">
       <header className="space-y-3">
         <Link
-          href="/schedule"
+          href="/posting-soon"
           className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors duration-200"
         >
           <ArrowLeft className="size-4" strokeWidth={1.5} aria-hidden="true" />
-          Back to Scheduled
+          Back to Posting Soon
         </Link>
         <p className="text-xs font-medium tracking-wide uppercase text-muted-foreground">
           {batch.batchOrdinalInPeriod !== null

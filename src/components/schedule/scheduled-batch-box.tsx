@@ -11,21 +11,17 @@ type Props = {
 };
 
 /**
- * Color-coded box for a single current-period batch on the Scheduled page.
- *
- * Two `derivedState` variants exist in the tone map:
- *  - `upcoming` (champagne) — the only one Stage-1 data ever produces.
- *  - `currently_posting` (emerald) — dormant Stage-1 contract; activates when
- *    Phase 4's `scheduleService` + Phase 7's `postingService` ship and start
- *    flipping `BatchBoxData.derivedState`. The variant must look correct
- *    against DESIGN.md tokens so Phase 4 doesn't have to touch this file.
+ * Champagne-tinted box for a single current-period batch on the Posting
+ * Soon page. The previous `derivedState` switch (with a dormant
+ * `currently_posting` variant) was removed by the navigation redesign — the
+ * "Currently Posting" concept is gone from the IA, so every box renders
+ * with the upcoming tone.
  *
  * No "finished/grey" variant — completed batches render via
  * `<PastBatchesList />` as compact rows, not full boxes.
  */
 export function ScheduledBatchBox({ data, onCancelClick }: Props) {
-  const tone = STATE_TONE[data.derivedState];
-  const label = formatLabel(data.ordinal, tone.copyLabel);
+  const label = formatLabel(data.ordinal, BOX_COPY_LABEL);
   // Total content pieces across networks. Unique copy per network means one
   // day-slot can yield up to 3 posts (FB + IG + LI), so a 7-day batch can
   // produce more than 7 posts. `data.totalPosts` is the nominal day count
@@ -44,14 +40,14 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
       )}
       aria-label={
         data.ordinal !== null
-          ? `Batch ${data.ordinal}, ${tone.copyLabel.toLowerCase()}`
-          : `Batch, ${tone.copyLabel.toLowerCase()}`
+          ? `Batch ${data.ordinal}, ${BOX_COPY_LABEL.toLowerCase()}`
+          : `Batch, ${BOX_COPY_LABEL.toLowerCase()}`
       }
     >
       <header
         className={cn(
           "px-6 py-3 border-b text-xs font-medium tracking-wider uppercase",
-          tone.headerStrip,
+          BOX_HEADER_STRIP,
         )}
       >
         {label}
@@ -83,7 +79,7 @@ export function ScheduledBatchBox({ data, onCancelClick }: Props) {
               ·
             </span>
             <Link
-              href={`/schedule/${data.id}`}
+              href={`/posting-soon/${data.id}`}
               className="text-foreground font-medium hover:underline underline-offset-4 decoration-primary/60"
             >
               {postsTotal} posts
@@ -115,17 +111,5 @@ function formatLabel(ordinal: number | null, stateLabel: string): string {
     : `BATCH · ${stateLabel}`;
 }
 
-const STATE_TONE: Record<
-  BatchBoxData["derivedState"],
-  { copyLabel: string; headerStrip: string }
-> = {
-  upcoming: {
-    copyLabel: "UPCOMING",
-    headerStrip: "bg-primary/15 text-primary border-b-primary/30",
-  },
-  currently_posting: {
-    copyLabel: "CURRENTLY POSTING",
-    headerStrip:
-      "bg-emerald-500/15 text-emerald-300 border-b-emerald-500/30",
-  },
-};
+const BOX_COPY_LABEL = "UPCOMING";
+const BOX_HEADER_STRIP = "bg-primary/15 text-primary border-b-primary/30";

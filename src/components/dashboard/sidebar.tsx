@@ -4,39 +4,31 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Calendar,
+  ClipboardList,
   Image as ImageIcon,
-  Send,
   Settings,
   Sparkles,
+  XCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 
 /**
- * Sidebar navigation items, declared in the locked order:
+ * Sidebar navigation items, declared in the locked order (navigation
+ * redesign Wave 1):
  *
- *   1. Create Posts        — where users start (Sparkles).
- *   2. Currently Posting   — what's live on social media right now (Send).
- *   3. Scheduled           — upcoming batch grid (Calendar).
- *   4. Image Library       — retained images (ImageIcon).
- *   5. Settings            — account + plan (Settings).
+ *   1. Create Posts    — where users start (Sparkles).
+ *   2. Schedule Posts  — review/edit/regenerate/schedule the drafted set
+ *                        (ClipboardList).
+ *   3. Posting Soon    — scheduled posts waiting to publish (Calendar).
+ *   4. Image Library   — retained images (ImageIcon).
+ *   5. Settings        — account + plan (Settings).
+ *   6. Cancelled Posts — single list of every cancelled post; REPOST per
+ *                        row (XCircle).
  *
- * "Currently Posting" deep-links into the locked-summary view of the batch
- * whose posting window is currently active. The href targets
- * `/posts/currently-posting` — a thin server route that re-resolves the
- * batch via `postService.getCurrentlyPostingBatch` (Pro: ordinal matching
- * the current period week; Starter / Trial: their single scheduling /
- * completed batch) and redirects to `/posts?batchId={id}`. Same helper the
- * `<CurrentlyPostingCta />` on `/create` uses, so the sidebar and the CTA
- * always land on the same batch. When no batch is currently posting the
- * route renders a calm empty state instead of redirecting.
- *
- * "My Posts" was removed in the prior redesign — visiting `/posts` or
- * `/posts?batchId={id}` intentionally no longer highlights any sidebar
- * item; the `/posts` route remains accessible to deep links and bookmarks.
- *
- * `href` matching is prefix-aware so nested routes (e.g. `/create/*`) keep
- * the parent item highlighted. The matcher in `isActive` below enforces that.
+ * `href` matching is prefix-aware so nested routes (e.g. `/schedule-posts/*`)
+ * keep the parent item highlighted. The matcher in `isActive` below
+ * enforces that.
  */
 type NavItem = {
   label: string;
@@ -46,14 +38,11 @@ type NavItem = {
 
 export const DASHBOARD_NAV_ITEMS: readonly NavItem[] = [
   { label: "Create Posts", href: "/create", icon: Sparkles },
-  {
-    label: "Currently Posting",
-    href: "/posts/currently-posting",
-    icon: Send,
-  },
-  { label: "Scheduled", href: "/schedule", icon: Calendar },
+  { label: "Schedule Posts", href: "/schedule-posts", icon: ClipboardList },
+  { label: "Posting Soon", href: "/posting-soon", icon: Calendar },
   { label: "Image Library", href: "/library", icon: ImageIcon },
   { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Cancelled Posts", href: "/cancelled-posts", icon: XCircle },
 ] as const;
 
 /**

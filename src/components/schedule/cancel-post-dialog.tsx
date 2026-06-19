@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { toast } from "sonner";
-import { cancelPostAction } from "@/app/(app)/(onboarded)/schedule/[batchId]/actions";
+import { cancelPostAction } from "@/app/(app)/(onboarded)/posting-soon/[batchId]/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

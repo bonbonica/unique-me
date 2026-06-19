@@ -2,7 +2,7 @@
 
 import { useTransition } from "react";
 import { toast } from "sonner";
-import { cancelBatchAction } from "@/app/(app)/(onboarded)/schedule/actions";
+import { cancelBatchAction } from "@/app/(app)/(onboarded)/posting-soon/actions";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

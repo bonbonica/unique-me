@@ -11,7 +11,7 @@ import { postService } from "@/lib/services";
  * `postService.stopBatch` that:
  *   1. Re-resolves the session (trusts only `session.user.id`).
  *   2. Maps the result-object contract to a UI-friendly shape.
- *   3. Revalidates both `/schedule` (box disappears) and `/create` (the
+ *   3. Revalidates both `/posting-soon` (box disappears) and `/create` (the
  *      newly-cancelled batch reappears there as a re-schedulable card —
  *      D-S6 in the redesign spec).
  *
@@ -34,7 +34,7 @@ export async function cancelBatchAction(
     return { ok: false, error: "failed" };
   }
 
-  revalidatePath("/schedule");
+  revalidatePath("/posting-soon");
   revalidatePath("/create");
   return { ok: true };
 }
