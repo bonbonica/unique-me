@@ -99,6 +99,10 @@ export async function unschedulePostAction(
   }
 
   revalidatePath("/posting-soon");
+  // The service may flip the batch back to `reviewing` when this
+  // unschedule empties its last selection — revalidate `/schedule-posts`
+  // so the batch reappears there immediately.
+  revalidatePath("/schedule-posts");
   return { ok: true };
 }
 

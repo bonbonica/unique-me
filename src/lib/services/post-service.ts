@@ -2091,6 +2091,14 @@ export async function getAllScheduledPostsForUser(
  * in that network's tab. The post itself stays in the batch — other
  * networks' selections (if any) are untouched.
  *
+ * **Empty-batch fall-back to `reviewing`:** when removing this selection
+ * leaves the batch with zero `post_selections` rows across all its posts,
+ * the same transaction flips `weekly_batches.status` from `scheduling` →
+ * `reviewing`. That makes the batch reappear on `/schedule-posts` so the
+ * user can edit and re-commit it. Without this, an unschedule-everything
+ * sequence would leave the batch in `scheduling` status with nothing to
+ * post — invisible everywhere except via direct URL.
+ *
  * Unlike `deselectForNetwork`, this function does NOT call
  * `loadPostForSelectionMutation` because that guard restricts mutation to
  * batches in `reviewing` or `cancelled` status. Posts on `/posting-soon`
@@ -2107,7 +2115,11 @@ export async function unschedulePostForNetwork(
   | { ok: false; error: "not_found" | "not_owned" | "db_failed" }
 > {
   const [row] = await db
-    .select({ userId: posts.userId, batchDeletedAt: weeklyBatches.deletedAt })
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+      batchDeletedAt: weeklyBatches.deletedAt,
+    })
     .from(posts)
     .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
     .where(eq(posts.id, postId))
@@ -2120,15 +2132,48 @@ export async function unschedulePostForNetwork(
     return { ok: false, error: "not_owned" };
   }
 
+  const { batchId } = row;
+
   try {
-    await db
-      .delete(postSelections)
-      .where(
-        and(
-          eq(postSelections.postId, postId),
-          eq(postSelections.platform, platform)
-        )
-      );
+    await db.transaction(async (tx) => {
+      // 1. Delete the (postId, platform) selection.
+      await tx
+        .delete(postSelections)
+        .where(
+          and(
+            eq(postSelections.postId, postId),
+            eq(postSelections.platform, platform)
+          )
+        );
+
+      // 2. Count remaining selections across every post in this batch.
+      //    If the row we just deleted was the last one for the batch,
+      //    the batch should fall back to `reviewing` so it reappears on
+      //    `/schedule-posts`.
+      const [countRow] = await tx
+        .select({ count: sql<number>`count(*)::int` })
+        .from(postSelections)
+        .innerJoin(posts, eq(posts.id, postSelections.postId))
+        .where(eq(posts.batchId, batchId));
+      const remaining = countRow?.count ?? 0;
+
+      // 3. Status-guarded flip back to `reviewing`. The `status =
+      //    'scheduling'` clause makes this race-safe: a concurrent
+      //    `stopBatch` (→ `cancelled`) or `reopenForEditing` (→
+      //    `reviewing` already) matches zero rows here, so we never
+      //    stomp another transition's outcome.
+      if (remaining === 0) {
+        await tx
+          .update(weeklyBatches)
+          .set({ status: "reviewing" })
+          .where(
+            and(
+              eq(weeklyBatches.id, batchId),
+              eq(weeklyBatches.status, "scheduling")
+            )
+          );
+      }
+    });
     return { ok: true };
   } catch (err) {
     console.error("[postService.unschedulePostForNetwork]", err);
