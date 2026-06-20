@@ -162,6 +162,16 @@ export const profiles = pgTable(
     )
       .notNull()
       .default(false),
+    // User-controlled toggle (Settings → "Generate images automatically").
+    // Default true preserves the AI-image-on-every-batch behaviour for
+    // existing users + new signups. When false, `postService.generateWeekly`
+    // skips both the `post_images` pending pre-inserts AND the
+    // `runImageGenerationForBatch` fan-out — posts render with the
+    // PostTileImage's quiet "no image" placeholder until the user uploads
+    // their own.
+    generateImagesAutomatically: boolean("generate_images_automatically")
+      .notNull()
+      .default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at")
       .defaultNow()

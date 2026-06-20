@@ -60,3 +60,32 @@ export async function updatePostingDaysAction(
   revalidatePath("/settings");
   return { ok: true };
 }
+
+/**
+ * Settings → "Generate images automatically" toggle. Writes
+ * `profiles.generate_images_automatically`. When false, the next call
+ * to `postService.generateWeekly` skips the `post_images` pending
+ * pre-inserts AND the `runImageGenerationForBatch` fan-out, so the
+ * batch lands with no AI images attached — the user can then upload
+ * their own per post.
+ */
+export async function updateGenerateImagesAutomaticallyAction(
+  enabled: boolean,
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "unauthenticated" | "db_failed" }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) return { ok: false, error: "unauthenticated" };
+
+  try {
+    await profileService.updateProfile(session.user.id, {
+      generateImagesAutomatically: enabled,
+    });
+  } catch {
+    return { ok: false, error: "db_failed" };
+  }
+
+  revalidatePath("/settings");
+  return { ok: true };
+}

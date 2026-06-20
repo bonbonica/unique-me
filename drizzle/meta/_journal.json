@@ -85,6 +85,13 @@
       "when": 1781738800809,
       "tag": "0011_famous_zodiak",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1781922569856,
+      "tag": "0012_breezy_shard",
+      "breakpoints": true
     }
   ]
 }

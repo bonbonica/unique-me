@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { ActivityStatsSection } from "@/components/settings/activity-stats-section";
+import { AutoImagesSection } from "@/components/settings/auto-images-section";
 import { PlanSection } from "@/components/settings/plan-section";
 import { PostingDaysSection } from "@/components/settings/posting-days-section";
 import { auth } from "@/lib/auth";
@@ -72,6 +73,10 @@ export default async function SettingsPage() {
           })}
           plan={subscription.plan}
         />
+      ) : null}
+
+      {profile !== null ? (
+        <AutoImagesSection initial={profile.generateImagesAutomatically} />
       ) : null}
     </div>
   );

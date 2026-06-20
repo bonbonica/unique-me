@@ -1051,19 +1051,27 @@ export async function generateWeekly(
       // action returns — no race between user-arrives-at-review and
       // rows-don't-exist-yet. `imageUrl` is null until success (Stage 1
       // made the column nullable to support exactly this state).
-      const imageRows = generated.posts.map((aiPost, i) => ({
-        id: crypto.randomUUID(),
-        postId: postRows[i]!.id,
-        userId,
-        imageUrl: null,
-        imagePrompt:
-          generated.batchImageStyle + " " + aiPost.imagePrompt,
-        attempt: 1,
-        source: "ai",
-        selected: true,
-        status: "pending" as const,
-      }));
-      await tx.insert(postImages).values(imageRows);
+      //
+      // Skipped entirely when the user has turned the
+      // "Generate images automatically" Settings toggle OFF — without
+      // the pre-insert, the row simply never exists, and PostTileImage's
+      // `image === undefined` branch renders the quiet "no image"
+      // placeholder until the user uploads their own.
+      if (profile.generateImagesAutomatically) {
+        const imageRows = generated.posts.map((aiPost, i) => ({
+          id: crypto.randomUUID(),
+          postId: postRows[i]!.id,
+          userId,
+          imageUrl: null,
+          imagePrompt:
+            generated.batchImageStyle + " " + aiPost.imagePrompt,
+          attempt: 1,
+          source: "ai",
+          selected: true,
+          status: "pending" as const,
+        }));
+        await tx.insert(postImages).values(imageRows);
+      }
 
       return { batchId, variationsCreated: variationRows.length };
     });
@@ -1078,9 +1086,16 @@ export async function generateWeekly(
     // need to wrap this call. A failure inside it logs to console and
     // leaves affected rows as `failed` or `pending`, which Wave 2's retry
     // control can recover.
-    after(() => {
-      imageService.runImageGenerationForBatch(result.batchId);
-    });
+    //
+    // Skipped when the user's "Generate images automatically" toggle is
+    // OFF — symmetric with the pre-insert skip above. No `post_images`
+    // rows exist for this batch, so the fan-out would have nothing to
+    // operate on anyway.
+    if (profile.generateImagesAutomatically) {
+      after(() => {
+        imageService.runImageGenerationForBatch(result.batchId);
+      });
+    }
 
     return {
       ok: true,

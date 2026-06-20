@@ -1081,10 +1081,65 @@ export async function deleteImageIfAllPlatformsPosted(
 // ============================================================================
 
 /**
+ * Source-aware cleanup of a post's CURRENT image. Used by both
+ * `uploadImageForPost` and `pickFromLibraryForPost` before they swap
+ * in the new one.
+ *
+ * The cleanup branches on `post_images.source`:
+ *   - **`"ai"`** — the AI-generated image is discarded. Blob is deleted
+ *     via `safeDeleteBlob`. The `post_images` row itself is deleted by
+ *     the caller's transaction. No library retention — the user
+ *     explicitly doesn't want auto-generated images cluttering their
+ *     library.
+ *   - **`"uploaded"`** — the user worked to upload this image; retain
+ *     it to the library so they can get it back. Reuses
+ *     `retainImagesToLibrary` to copy the URL into `library_images`;
+ *     the blob stays alive (now referenced by the library row). The
+ *     caller's transaction deletes the post_images row.
+ *   - **`"library"`** — the post merely references a library blob;
+ *     the library still owns it. Skip both retention and blob delete.
+ *     The caller's transaction deletes the post_images row only.
+ *
+ * No-op (returns ok) when the post has no successful image yet
+ * (`imageUrl IS NULL`).
+ */
+async function cleanupPriorPostImage(
+  sessionUserId: string,
+  postId: string,
+): Promise<ImageServiceResult> {
+  const [prior] = await db
+    .select({
+      imageUrl: postImages.imageUrl,
+      source: postImages.source,
+    })
+    .from(postImages)
+    .where(eq(postImages.postId, postId))
+    .limit(1);
+
+  if (!prior || prior.imageUrl === null) {
+    return { ok: true };
+  }
+
+  if (prior.source === "uploaded") {
+    return retainImagesToLibrary(sessionUserId, [postId]);
+  }
+
+  if (prior.source === "ai") {
+    await safeDeleteBlob(prior.imageUrl);
+    return { ok: true };
+  }
+
+  // source === "library": post just referenced the library's blob;
+  // library still owns it. Nothing to retain, nothing to delete here.
+  return { ok: true };
+}
+
+/**
  * Replace the post's image with a user-uploaded one. Validates size +
  * mime, resizes via `sharp` to a canonical 1080×1080 JPEG, writes two
- * blobs (post + library), retains the prior image to library, and
- * swaps the `post_images` row in a single transaction.
+ * blobs (post + library), source-aware-cleans the prior image (see
+ * {@link cleanupPriorPostImage}), and swaps the `post_images` row in a
+ * single transaction.
  */
 export async function uploadImageForPost(
   sessionUserId: string,
@@ -1160,20 +1215,20 @@ export async function uploadImageForPost(
     return { ok: false, error: "processing_failed" };
   }
 
-  // 5. Retain the prior image to library BEFORE we drop its row. Wraps
-  //    the existing service so the retention path stays single-sourced.
-  //    Safe to call when there's no prior row (it short-circuits on
-  //    empty input). Skipped only when the post had no successful image
-  //    to begin with — see the imageUrl null guard inside.
-  const retain = await retainImagesToLibrary(sessionUserId, [postId]);
-  if (!retain.ok) {
-    // Hard fail — we don't want to silently drop an image. Caller can
-    // retry; the new blobs we just uploaded become orphans until a
-    // future cleanup job sweeps them (acceptable trade-off — Vercel
-    // Blob retention is cheap).
+  // 5. Source-aware cleanup of the prior image (if any) BEFORE we drop
+  //    its row. The user explicitly only wants user-uploaded prior
+  //    images retained to the library — AI images are discarded, and
+  //    library-sourced posts release the row without touching the
+  //    blob (which the library still owns).
+  const cleanup = await cleanupPriorPostImage(sessionUserId, postId);
+  if (!cleanup.ok) {
+    // Retention failure is the only path that surfaces an error here.
+    // Caller can retry; the new blobs we just uploaded become orphans
+    // until a future cleanup job sweeps them (acceptable trade-off —
+    // Vercel Blob retention is cheap).
     console.error(
-      "[imageService.uploadImageForPost] retain to library failed",
-      retain,
+      "[imageService.uploadImageForPost] prior-image cleanup failed",
+      cleanup,
     );
     return { ok: false, error: "db_failed" };
   }
@@ -1261,13 +1316,14 @@ export async function pickFromLibraryForPost(
     return { ok: false, error: "not_owned" };
   }
 
-  // 3. Retain prior image to library (same single-source pattern as
-  //    uploadImageForPost). No-op when the post has no successful image.
-  const retain = await retainImagesToLibrary(sessionUserId, [postId]);
-  if (!retain.ok) {
+  // 3. Source-aware cleanup of the prior image — same rules as
+  //    uploadImageForPost (AI → delete blob, uploaded → retain to
+  //    library, library → leave the blob alone).
+  const cleanup = await cleanupPriorPostImage(sessionUserId, postId);
+  if (!cleanup.ok) {
     console.error(
-      "[imageService.pickFromLibraryForPost] retain to library failed",
-      retain,
+      "[imageService.pickFromLibraryForPost] prior-image cleanup failed",
+      cleanup,
     );
     return { ok: false, error: "db_failed" };
   }

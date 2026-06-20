@@ -56,6 +56,11 @@ export const saveProfileSchema = z.object({
     .enum(["every_day", "working_days_only", "weekends_only"])
     .nullable()
     .optional(),
+  // User-controlled toggle for whether `postService.generateWeekly` runs
+  // the AI image-generation fan-out on new batches. Optional — onboarding
+  // never sets it; the column's DB default (true) preserves today's
+  // behaviour. The Settings page is the only writer.
+  generateImagesAutomatically: z.boolean().optional(),
   websiteAnalysis: z
     .object({
       businessSummary: z.string(),
@@ -232,6 +237,9 @@ export async function updateProfile(
   // explicitly supplies `null`, that's the user clearing it back to "default".
   if (data.postingDays !== undefined) {
     set.postingDays = data.postingDays ?? null;
+  }
+  if (data.generateImagesAutomatically !== undefined) {
+    set.generateImagesAutomatically = data.generateImagesAutomatically;
   }
 
   const [row] = await db

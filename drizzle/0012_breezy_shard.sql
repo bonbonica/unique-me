@@ -1,0 +1,1 @@
+ALTER TABLE "profiles" ADD COLUMN "generate_images_automatically" boolean DEFAULT true NOT NULL;
