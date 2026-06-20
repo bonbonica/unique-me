@@ -8,3 +8,19 @@ overrides:
   kysely: 0.28.17
   '@types/react': 19.2.5
   '@types/react-dom': 19.2.3
+
+# Force pnpm to install platform binaries for both the developer's host
+# and Vercel's linux-x64/glibc runtime. Without this, sharp's per-platform
+# optional deps (@img/sharp-linux-x64, @img/sharp-libvips-linux-x64) are
+# skipped on Windows installs and missing from node_modules on Vercel,
+# causing ERR_DLOPEN_FAILED at Lambda cold start.
+supportedArchitectures:
+  os:
+    - current
+    - linux
+  cpu:
+    - current
+    - x64
+  libc:
+    - current
+    - glibc

@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Keep sharp out of the webpack bundle so its native binary + libvips .so
+  // load from node_modules at runtime. Without this the Vercel Lambda can
+  // crash on cold start with ERR_DLOPEN_FAILED on libvips-cpp.so.
+  serverExternalPackages: ["sharp"],
+
   // Image optimization configuration
   images: {
     remotePatterns: [
