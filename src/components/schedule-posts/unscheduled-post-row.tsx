@@ -1,12 +1,14 @@
 "use client";
 
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
+import { ImageIcon } from "lucide-react";
 import { toast } from "sonner";
 import { regenerateImageAction } from "@/app/(app)/(onboarded)/posts/actions";
 import { scheduleSinglePostAction } from "@/app/(app)/(onboarded)/schedule-posts/actions";
 import { EditDialog } from "@/components/posts/edit-dialog";
 import { aspectRatioFor } from "@/components/posts/network-preview";
 import { PostTileImage } from "@/components/posts/post-tile-image";
+import { UploadImageDialog } from "@/components/posts/upload-image-dialog";
 import { Button } from "@/components/ui/button";
 import type { UnscheduledPostRowData } from "@/lib/services/post-service";
 
@@ -37,6 +39,7 @@ export function UnscheduledPostRow({
   isPro: boolean;
 }) {
   const [pending, startTransition] = useTransition();
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   function handleSchedule() {
     startTransition(async () => {
@@ -94,8 +97,23 @@ export function UnscheduledPostRow({
             {pending ? "Scheduling…" : "Schedule"}
           </Button>
           <EditDialog post={row.post} />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            onClick={() => setUploadOpen(true)}
+          >
+            <ImageIcon className="size-4" strokeWidth={1.5} aria-hidden="true" />
+            Upload image
+          </Button>
         </div>
       </div>
+      <UploadImageDialog
+        postId={row.postId}
+        open={uploadOpen}
+        onOpenChange={setUploadOpen}
+      />
     </article>
   );
 }

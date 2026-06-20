@@ -4,6 +4,7 @@ import { after } from "next/server";
 import { del } from "@vercel/blob";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import pLimit from "p-limit";
+import sharp from "sharp";
 import { generateImage } from "@/lib/ai/image-generator";
 import { db } from "@/lib/db";
 import {
@@ -18,6 +19,36 @@ import {
 } from "@/lib/schema";
 import { upload } from "@/lib/storage";
 import * as subscriptionService from "./subscription-service";
+
+// ============================================================================
+// User-uploaded image config — used by `uploadImageForPost`. The canonical
+// upload pipeline resizes every input to a single 1080×1080 JPEG so the
+// downstream renderer + future posting worker don't have to deal with
+// variable dimensions or formats. Matches the AI-generated image's
+// roughly-square aspect today.
+// ============================================================================
+
+const UPLOAD_CANONICAL_SIZE = 1080;
+const UPLOAD_OUTPUT_QUALITY = 88;
+const UPLOAD_MAX_INPUT_BYTES = 5 * 1024 * 1024; // 5MB
+const UPLOAD_ALLOWED_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+]);
+
+export type UploadImageResult =
+  | { ok: true; imageUrl: string }
+  | {
+      ok: false;
+      error:
+        | "not_found"
+        | "not_owned"
+        | "too_large"
+        | "bad_mime"
+        | "processing_failed"
+        | "db_failed";
+    };
 
 /**
  * Stage-2 D-S2-9. The single orchestrator for the Vercel Blob lifecycle. Every
@@ -698,8 +729,15 @@ export type InspectCleanupResult = {
 };
 
 export type PickFromLibraryResult =
-  | { ok: true }
-  | { ok: false; error: "not_implemented" };
+  | { ok: true; imageUrl: string }
+  | {
+      ok: false;
+      error:
+        | "not_found"
+        | "not_owned"
+        | "library_image_not_found"
+        | "db_failed";
+    };
 
 /**
  * Pure read — returns the state the onboarded layout needs to decide
@@ -1023,25 +1061,242 @@ export async function deleteImageIfAllPlatformsPosted(
   }
 }
 
+// ============================================================================
+// Upload-your-own-image — `uploadImageForPost` + `pickFromLibraryForPost`.
+//
+// Both replace the post's current image (an AI image, a previous upload,
+// or a library reference) with the new one. The current image — if any —
+// is retained to the library first so the user never silently loses an
+// image they might want back.
+//
+// Upload: TWO blob uploads happen — one to `post-images/{batchId}` and
+// one to `library-images/{userId}`. The two URLs are independent, so
+// deleting the library copy never breaks the post copy. Costs one extra
+// Vercel Blob write per upload; bulletproof against the orphan-blob bug.
+//
+// Library-pick: REFERENCES the library blob URL (no copy). The library's
+// cleanup logic protects in-use rows via `lastUsedAt`, which this
+// function bumps. If the user manually deletes the library image, the
+// post 404s — known trade-off, accepted for v1.
+// ============================================================================
+
 /**
- * Wave 4 picker stub. Future implementation will:
- *   - Copy `library_images.imageUrl` + `imagePrompt` into the target
- *     `post_images` row.
- *   - Set `post_images.source = "library"`.
- *   - UPDATE `library_images.lastUsedAt = now()` so the cleanup sort
- *     protects recently-reused images.
- *
- * Wave 3 ships the signature only — gives the future picker UI a stable
- * import surface to land against without coordinating a service-layer
- * change in the same wave.
+ * Replace the post's image with a user-uploaded one. Validates size +
+ * mime, resizes via `sharp` to a canonical 1080×1080 JPEG, writes two
+ * blobs (post + library), retains the prior image to library, and
+ * swaps the `post_images` row in a single transaction.
  */
-export async function pickFromLibrary(
-  libraryImageId: string,
-  postImageId: string,
+export async function uploadImageForPost(
   sessionUserId: string,
+  postId: string,
+  rawBuffer: Buffer,
+  mimeType: string,
+): Promise<UploadImageResult> {
+  // 1. Cheap input validation BEFORE any expensive work (sharp / blob).
+  if (!UPLOAD_ALLOWED_MIME.has(mimeType)) {
+    return { ok: false, error: "bad_mime" };
+  }
+  if (rawBuffer.length > UPLOAD_MAX_INPUT_BYTES) {
+    return { ok: false, error: "too_large" };
+  }
+
+  // 2. Ownership + batch lookup.
+  const [row] = await db
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+      batchDeletedAt: weeklyBatches.deletedAt,
+    })
+    .from(posts)
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!row || row.batchDeletedAt !== null) {
+    return { ok: false, error: "not_found" };
+  }
+  if (row.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // 3. Resize + normalize to a canonical 1080×1080 JPEG via sharp.
+  //    `fit: cover` center-crops to square; quality 88 keeps file size
+  //    reasonable without visible artefacts at this resolution. Failures
+  //    surface as `processing_failed` (corrupt image, unsupported format
+  //    that slipped the mime check, etc.).
+  let processed: Buffer;
+  try {
+    processed = await sharp(rawBuffer)
+      .resize(UPLOAD_CANONICAL_SIZE, UPLOAD_CANONICAL_SIZE, { fit: "cover" })
+      .jpeg({ quality: UPLOAD_OUTPUT_QUALITY })
+      .toBuffer();
+  } catch (err) {
+    console.error("[imageService.uploadImageForPost] sharp failed", err);
+    return { ok: false, error: "processing_failed" };
+  }
+
+  // 4. Two independent blob uploads — post copy and library copy never
+  //    share a URL, so deleting from the library can never break the
+  //    post image. Same buffer, two different paths.
+  let postBlobUrl: string;
+  let libraryBlobUrl: string;
+  try {
+    const postBlob = await upload(
+      processed,
+      `${crypto.randomUUID()}.jpg`,
+      `post-images/${row.batchId}`,
+      { maxSize: UPLOAD_MAX_INPUT_BYTES * 2 },
+    );
+    const libraryBlob = await upload(
+      processed,
+      `${crypto.randomUUID()}.jpg`,
+      `library-images/${sessionUserId}`,
+      { maxSize: UPLOAD_MAX_INPUT_BYTES * 2 },
+    );
+    postBlobUrl = postBlob.url;
+    libraryBlobUrl = libraryBlob.url;
+  } catch (err) {
+    console.error("[imageService.uploadImageForPost] blob upload failed", err);
+    return { ok: false, error: "processing_failed" };
+  }
+
+  // 5. Retain the prior image to library BEFORE we drop its row. Wraps
+  //    the existing service so the retention path stays single-sourced.
+  //    Safe to call when there's no prior row (it short-circuits on
+  //    empty input). Skipped only when the post had no successful image
+  //    to begin with — see the imageUrl null guard inside.
+  const retain = await retainImagesToLibrary(sessionUserId, [postId]);
+  if (!retain.ok) {
+    // Hard fail — we don't want to silently drop an image. Caller can
+    // retry; the new blobs we just uploaded become orphans until a
+    // future cleanup job sweeps them (acceptable trade-off — Vercel
+    // Blob retention is cheap).
+    console.error(
+      "[imageService.uploadImageForPost] retain to library failed",
+      retain,
+    );
+    return { ok: false, error: "db_failed" };
+  }
+
+  // 6. Swap the post_images row and create the library_images row in
+  //    one transaction.
+  try {
+    await db.transaction(async (tx) => {
+      await tx.delete(postImages).where(eq(postImages.postId, postId));
+      await tx.insert(postImages).values({
+        postId,
+        userId: sessionUserId,
+        imageUrl: postBlobUrl,
+        imagePrompt: "User upload",
+        source: "uploaded",
+        status: "success",
+        attempt: 1,
+      });
+      await tx.insert(libraryImages).values({
+        userId: sessionUserId,
+        imageUrl: libraryBlobUrl,
+        imagePrompt: "User upload",
+        source: "uploaded",
+        originPostId: postId,
+        originBatchId: row.batchId,
+      });
+    });
+  } catch (err) {
+    console.error("[imageService.uploadImageForPost] db write failed", err);
+    return { ok: false, error: "db_failed" };
+  }
+
+  return { ok: true, imageUrl: postBlobUrl };
+}
+
+/**
+ * Replace the post's image with one the user has already saved to the
+ * library. References the library blob URL directly — no copy, no
+ * second blob upload. The library's cleanup logic protects in-use rows
+ * via `lastUsedAt`, which this function bumps.
+ *
+ * Mirrors `uploadImageForPost`'s retain-then-swap order so the prior
+ * post image (AI, uploaded, or library) lands back in the library
+ * before being replaced.
+ */
+export async function pickFromLibraryForPost(
+  sessionUserId: string,
+  postId: string,
+  libraryImageId: string,
 ): Promise<PickFromLibraryResult> {
-  void libraryImageId;
-  void postImageId;
-  void sessionUserId;
-  return { ok: false, error: "not_implemented" };
+  // 1. Ownership + batch lookup for the post.
+  const [postRow] = await db
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+      batchDeletedAt: weeklyBatches.deletedAt,
+    })
+    .from(posts)
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!postRow || postRow.batchDeletedAt !== null) {
+    return { ok: false, error: "not_found" };
+  }
+  if (postRow.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // 2. Library image ownership lookup.
+  const [libRow] = await db
+    .select({
+      userId: libraryImages.userId,
+      imageUrl: libraryImages.imageUrl,
+      imagePrompt: libraryImages.imagePrompt,
+    })
+    .from(libraryImages)
+    .where(eq(libraryImages.id, libraryImageId))
+    .limit(1);
+
+  if (!libRow) {
+    return { ok: false, error: "library_image_not_found" };
+  }
+  if (libRow.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  // 3. Retain prior image to library (same single-source pattern as
+  //    uploadImageForPost). No-op when the post has no successful image.
+  const retain = await retainImagesToLibrary(sessionUserId, [postId]);
+  if (!retain.ok) {
+    console.error(
+      "[imageService.pickFromLibraryForPost] retain to library failed",
+      retain,
+    );
+    return { ok: false, error: "db_failed" };
+  }
+
+  // 4. Swap the post_images row + bump lastUsedAt in one transaction.
+  try {
+    await db.transaction(async (tx) => {
+      await tx.delete(postImages).where(eq(postImages.postId, postId));
+      await tx.insert(postImages).values({
+        postId,
+        userId: sessionUserId,
+        imageUrl: libRow.imageUrl,
+        imagePrompt: libRow.imagePrompt,
+        source: "library",
+        status: "success",
+        attempt: 1,
+      });
+      await tx
+        .update(libraryImages)
+        .set({ lastUsedAt: new Date() })
+        .where(eq(libraryImages.id, libraryImageId));
+    });
+  } catch (err) {
+    console.error(
+      "[imageService.pickFromLibraryForPost] db write failed",
+      err,
+    );
+    return { ok: false, error: "db_failed" };
+  }
+
+  return { ok: true, imageUrl: libRow.imageUrl };
 }

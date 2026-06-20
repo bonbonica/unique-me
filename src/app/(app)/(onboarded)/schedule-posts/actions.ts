@@ -4,8 +4,8 @@ import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import type { SelectionPlatform } from "@/lib/schema";
-import { postService } from "@/lib/services";
+import type { LibraryImage, SelectionPlatform } from "@/lib/schema";
+import { imageService, postService } from "@/lib/services";
 
 /**
  * Instant per-row Schedule from the `/schedule-posts` tabs view. Wraps
@@ -68,4 +68,54 @@ export async function scheduleAllForNetworkAction(
   revalidatePath("/schedule-posts");
   revalidatePath("/posting-soon");
   return { ok: true, added: result.added };
+}
+
+/**
+ * Library-pick action backing the "From library" tab of
+ * `<UploadImageDialog>`. Wraps `imageService.pickFromLibraryForPost`,
+ * which references the library blob URL directly (no copy) and bumps
+ * `library_images.lastUsedAt` so the monthly cleanup keeps the chosen
+ * image alive.
+ */
+export async function pickFromLibraryAction(
+  postId: string,
+  libraryImageId: string,
+): Promise<
+  | { ok: true; imageUrl: string }
+  | {
+      ok: false;
+      error: "not_found" | "not_owned" | "library_image_not_found" | "failed";
+    }
+> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+
+  const result = await imageService.pickFromLibraryForPost(
+    session.user.id,
+    postId,
+    libraryImageId,
+  );
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error === "db_failed" ? "failed" : result.error,
+    };
+  }
+
+  revalidatePath("/schedule-posts");
+  revalidatePath("/posting-soon");
+  revalidatePath("/library");
+  return { ok: true, imageUrl: result.imageUrl };
+}
+
+/**
+ * Lazy library list loader backing the "From library" tab of
+ * `<UploadImageDialog>`. Fires only when the user actually switches to
+ * that tab, so the dialog's initial mount stays cheap (most users will
+ * upload, not pick).
+ */
+export async function loadLibraryForPickerAction(): Promise<LibraryImage[]> {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login");
+  return imageService.listLibrary(session.user.id);
 }
