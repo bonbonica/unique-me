@@ -4,7 +4,6 @@ import { after } from "next/server";
 import { del } from "@vercel/blob";
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 import pLimit from "p-limit";
-import sharp from "sharp";
 import { generateImage } from "@/lib/ai/image-generator";
 import { db } from "@/lib/db";
 import {
@@ -1179,8 +1178,14 @@ export async function uploadImageForPost(
   //    reasonable without visible artefacts at this resolution. Failures
   //    surface as `processing_failed` (corrupt image, unsupported format
   //    that slipped the mime check, etc.).
+  // Lazy-load sharp so its native binding only resolves when an upload
+  // actually runs. Top-level import would force every Lambda that bundles
+  // this module (auth, dashboard, marketing) to dlopen libvips at cold
+  // start — and any sharp install regression on Vercel would cascade into
+  // 500s on routes that have nothing to do with images.
   let processed: Buffer;
   try {
+    const { default: sharp } = await import("sharp");
     processed = await sharp(rawBuffer)
       .resize(UPLOAD_CANONICAL_SIZE, UPLOAD_CANONICAL_SIZE, { fit: "cover" })
       .jpeg({ quality: UPLOAD_OUTPUT_QUALITY })
