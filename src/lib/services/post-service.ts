@@ -160,6 +160,11 @@ export type PostImageStatus = {
   // The outer Record is keyed by `postId` (NOT this id) so the UI can
   // render one tile per post.
   id: string;
+  // Image-source provenance (`post_images.source`). The UI uses this to
+  // gate the Pro regenerate icon — only AI-generated images can be
+  // regenerated via the prompt; uploaded / library images have no
+  // meaningful prompt to re-run.
+  source: "ai" | "uploaded" | "library";
 };
 
 export type BatchForReview = {
@@ -776,6 +781,7 @@ export async function getBatchForReview(
             status: postImages.status,
             imageUrl: postImages.imageUrl,
             attempt: postImages.attempt,
+            source: postImages.source,
           })
           .from(postImages)
           .where(inArray(postImages.postId, postIds))
@@ -801,14 +807,16 @@ export async function getBatchForReview(
 
   const images: Record<string, PostImageStatus> = {};
   for (const r of imageRows) {
-    // Defensive cast: status is `text` in Drizzle; runtime values are
-    // constrained by the service layer (runImageGenerationForBatch + the
-    // pending-row pre-insert in generateWeekly).
+    // Defensive cast: status / source are `text` in Drizzle; runtime
+    // values are constrained by the service layer
+    // (runImageGenerationForBatch + the pending-row pre-insert in
+    // generateWeekly + uploadImageForPost + pickFromLibraryForPost).
     images[r.postId] = {
       id: r.id,
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
       attempt: r.attempt,
+      source: r.source as PostImageStatus["source"],
     };
   }
 
@@ -848,6 +856,7 @@ export async function getBatchImageStatuses(
       status: postImages.status,
       imageUrl: postImages.imageUrl,
       attempt: postImages.attempt,
+      source: postImages.source,
     })
     .from(postImages)
     .innerJoin(posts, eq(postImages.postId, posts.id))
@@ -860,6 +869,7 @@ export async function getBatchImageStatuses(
       status: r.status as PostImageStatus["status"],
       imageUrl: r.imageUrl,
       attempt: r.attempt,
+      source: r.source as PostImageStatus["source"],
     };
   }
   return out;
@@ -2256,7 +2266,7 @@ export async function getAllUnscheduledPostsForUser(
     variationByPostPlatform.set(`${v.postId}:${v.platform}`, v.text);
   }
 
-  // 4. Images for `<PostTileImage>` (status + URL + attempt + id).
+  // 4. Images for `<PostTileImage>` (status + URL + attempt + id + source).
   const imageRows = await db
     .select({
       id: postImages.id,
@@ -2264,6 +2274,7 @@ export async function getAllUnscheduledPostsForUser(
       status: postImages.status,
       imageUrl: postImages.imageUrl,
       attempt: postImages.attempt,
+      source: postImages.source,
     })
     .from(postImages)
     .where(inArray(postImages.postId, postIds));
@@ -2274,6 +2285,7 @@ export async function getAllUnscheduledPostsForUser(
       status: img.status as PostImageStatus["status"],
       imageUrl: img.imageUrl,
       attempt: img.attempt,
+      source: img.source as PostImageStatus["source"],
     });
   }
 

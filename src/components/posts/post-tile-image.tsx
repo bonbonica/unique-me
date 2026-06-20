@@ -57,9 +57,16 @@ export function PostTileImage({
 }) {
   if (image?.status === "success" && image.imageUrl) {
     // Capture the closure once so TypeScript narrows the handler in the
-    // JSX consumer below without non-null assertions.
+    // JSX consumer below without non-null assertions. Gated additionally
+    // on `image.source === "ai"` — uploaded and library images have no
+    // meaningful AI prompt to re-run, so we hide the regenerate icon for
+    // them. The user replaces those via the Upload dialog instead.
     const regenerateClick =
-      isPro && image.attempt < 2 && onRegenerate && postId
+      isPro &&
+      image.attempt < 2 &&
+      image.source === "ai" &&
+      onRegenerate &&
+      postId
         ? () => onRegenerate(postId)
         : null;
 

@@ -52,9 +52,20 @@ export function UnscheduledPostRow({
     });
   }
 
-  function handleRegenerateImage(postId: string) {
+  function handleRegenerateImage() {
+    // `regenerateImageAction` keys off `post_images.id` (the IMAGE row
+    // id), not `posts.id`. PostTileImage hands its `onRegenerate`
+    // callback the post id under the prop name `postId`, but we
+    // deliberately ignore it and reach for `row.image.id` — the
+    // wizard's `handleRegenerate` does the same translation. Defensive
+    // null guard: PostTileImage only shows the regenerate icon when
+    // `image.source === "ai"`, so this should be non-null at click
+    // time, but we early-return rather than throw if something racy
+    // produces a click with no image attached.
+    const imageRowId = row.image?.id;
+    if (!imageRowId) return;
     startTransition(async () => {
-      const result = await regenerateImageAction(postId);
+      const result = await regenerateImageAction(imageRowId);
       if (!result.ok) {
         toast.error("Couldn't regenerate the image.");
         return;
