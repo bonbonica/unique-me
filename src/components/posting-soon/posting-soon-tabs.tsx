@@ -4,7 +4,10 @@ import { useState } from "react";
 import { Facebook, Instagram, Linkedin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { SelectionPlatform } from "@/lib/schema";
-import type { ScheduledPostRowData } from "@/lib/services/post-service";
+import type {
+  BatchGroup,
+  ScheduledPostRowData,
+} from "@/lib/services/post-service";
 import { cn } from "@/lib/utils";
 import { ScheduledPostRow } from "./scheduled-post-row";
 
@@ -25,20 +28,23 @@ const PLATFORM_ICON: Record<
 
 /**
  * Tabbed network view for `/posting-soon`. One tab per platform listed in
- * `platforms` (the user's onboarding selection — `profile.platforms`).
- * Each tab renders every scheduled (post, platform) row for that network,
- * already ordered by scheduled date ascending by the server.
+ * `platforms` (the user's `profile.platforms`). Each tab lists every
+ * scheduled `(post, platform)` row for that network, grouped by batch
+ * with a theme + important-thing header (week separator). Within a
+ * group, rows are pre-ordered ascending by scheduled date.
  *
- * No persistent URL state — the initial tab is whichever platform appears
- * first in `platforms`; switching tabs is local component state. Light
- * enough that a navigation round-trip isn't worth the friction.
+ * No persistent URL state — initial tab is the first platform; switching
+ * tabs is local component state.
  */
 export function PostingSoonTabs({
   platforms,
   postsByPlatform,
 }: {
   platforms: SelectionPlatform[];
-  postsByPlatform: Record<SelectionPlatform, ScheduledPostRowData[]>;
+  postsByPlatform: Record<
+    SelectionPlatform,
+    BatchGroup<ScheduledPostRowData>[]
+  >;
 }) {
   const [activeTab, setActiveTab] = useState<SelectionPlatform | null>(
     platforms[0] ?? null,
@@ -53,7 +59,11 @@ export function PostingSoonTabs({
     );
   }
 
-  const activePosts = activeTab ? postsByPlatform[activeTab] : [];
+  const activeGroups = activeTab ? postsByPlatform[activeTab] : [];
+  const activeRowCount = activeGroups.reduce(
+    (sum, group) => sum + group.rows.length,
+    0,
+  );
 
   return (
     <div className="space-y-6">
@@ -65,7 +75,10 @@ export function PostingSoonTabs({
         {platforms.map((platform) => {
           const Icon = PLATFORM_ICON[platform];
           const isActive = platform === activeTab;
-          const count = postsByPlatform[platform].length;
+          const count = postsByPlatform[platform].reduce(
+            (sum, group) => sum + group.rows.length,
+            0,
+          );
           return (
             <Button
               key={platform}
@@ -101,20 +114,34 @@ export function PostingSoonTabs({
           id={`posting-soon-panel-${activeTab}`}
           role="tabpanel"
           aria-labelledby={`posting-soon-tab-${activeTab}`}
-          className="space-y-4"
+          className="space-y-6"
         >
-          {activePosts.length === 0 ? (
+          {activeRowCount === 0 ? (
             <p className="text-base text-muted-foreground leading-7">
               No posts scheduled to {PLATFORM_LABEL[activeTab]} yet.
             </p>
           ) : (
-            <ul className="space-y-4">
-              {activePosts.map((row) => (
-                <li key={`${row.postId}-${row.platform}`}>
-                  <ScheduledPostRow row={row} />
-                </li>
-              ))}
-            </ul>
+            activeGroups.map((group) => (
+              <section key={group.batchId} className="space-y-3">
+                <header className="space-y-1">
+                  <h2 className="font-fraunces text-xl font-medium tracking-tight">
+                    {group.batchTheme}
+                  </h2>
+                  {group.batchImportantThing ? (
+                    <p className="text-sm text-muted-foreground leading-6">
+                      {group.batchImportantThing}
+                    </p>
+                  ) : null}
+                </header>
+                <ul className="space-y-4">
+                  {group.rows.map((row) => (
+                    <li key={`${row.postId}-${row.platform}`}>
+                      <ScheduledPostRow row={row} />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))
           )}
         </div>
       ) : null}

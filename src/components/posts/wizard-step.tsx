@@ -183,7 +183,7 @@ export function WizardStep({
         <div className="flex items-start justify-between gap-4 flex-wrap">
           <div className="space-y-1 min-w-0">
             <h2 className="font-fraunces text-2xl sm:text-3xl tracking-tight font-medium">
-              Review for {NETWORK_LABELS[platform]}
+              Schedule for {NETWORK_LABELS[platform]}
             </h2>
             <p className="text-sm text-muted-foreground">
               Check the posts you want to publish on{" "}

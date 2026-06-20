@@ -3,6 +3,7 @@ import "server-only";
 import { after } from "next/server";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import * as postGenerator from "@/lib/ai/post-generator";
+import { spellCheckBatchInputs } from "@/lib/ai/spell-check";
 import { db } from "@/lib/db";
 import {
   resolveBatchPlan,
@@ -954,10 +955,21 @@ export async function generateWeekly(
     batchId
   );
 
+  // Silent AI spell-check: fix spelling mistakes in the user's typed
+  // theme + importantThing without changing meaning. Failures fall
+  // back to the originals — generation must not break because of this.
+  // The corrected values feed BOTH the downstream AI post-generation
+  // prompt and the persisted weekly_batches row so the typos never
+  // surface anywhere in the system.
+  const corrected = await spellCheckBatchInputs(
+    input.theme,
+    input.importantThing,
+  );
+
   const generated = await postGenerator.generate({
     profile,
-    theme: input.theme,
-    importantThing: input.importantThing,
+    theme: corrected.theme,
+    importantThing: corrected.importantThing,
     lengths,
   });
   if (!generated) return { ok: false, error: "ai_failed" };
@@ -967,8 +979,8 @@ export async function generateWeekly(
       await tx.insert(weeklyBatches).values({
         id: batchId,
         userId,
-        theme: input.theme,
-        importantThing: input.importantThing,
+        theme: corrected.theme,
+        importantThing: corrected.importantThing,
         postLength: input.postLength,
         // Filtered count from the calendar plan — NOT input.postCount. The
         // two diverge once `postingDays` is anything other than "every_day".
@@ -1980,7 +1992,7 @@ export async function restorePost(
 // =============================================================================
 
 /**
- * Per-network row shape consumed by the `/posting-soon` tabs view.
+ * Per-network row shape for the `/posting-soon` tabs view.
  */
 export type ScheduledPostRowData = {
   postId: string;
@@ -1992,8 +2004,43 @@ export type ScheduledPostRowData = {
 };
 
 /**
+ * Per-network row shape for the `/schedule-posts` tabs view. Richer than
+ * `ScheduledPostRowData` because the schedule-posts row also exposes the
+ * full Post (for `<EditDialog>`) and the per-post image status (for
+ * `<PostTileImage>` with the Pro regenerate icon).
+ */
+export type UnscheduledPostRowData = {
+  postId: string;
+  batchId: string;
+  platform: SelectionPlatform;
+  text: string;
+  scheduledTime: Date;
+  /** Full Post row — passed to the existing `<EditDialog post={post}>` reuse. */
+  post: Post;
+  /** Full image status — passed to `<PostTileImage image={image}>`. */
+  image: PostImageStatus | undefined;
+};
+
+/**
+ * Shared per-batch group wrapper. Both `/schedule-posts` and
+ * `/posting-soon` render posts grouped by batch with the batch theme +
+ * important-thing as the section header (acts as a week separator).
+ */
+export type BatchGroup<T> = {
+  batchId: string;
+  batchTheme: string;
+  batchImportantThing: string;
+  batchCreatedAt: Date;
+  rows: T[];
+};
+
+/**
  * Load every scheduled (postId, platform) row for the user, grouped by
- * platform. Powers the `/posting-soon` tabs view.
+ * platform AND by batch. Powers the `/posting-soon` tabs view. Each
+ * platform's array contains one entry per `'scheduling'` batch that has
+ * at least one selection on that platform; the batch header carries
+ * `theme` + `importantThing` so the page renders a week separator above
+ * each group.
  *
  * **Reader source — PRESENT-DAY** (mirrors `<BatchDetailView />`'s choice in
  * batch-detail-view.tsx §5.3): reads `post_selections` rather than
@@ -2003,26 +2050,34 @@ export type ScheduledPostRowData = {
  * list. Tombstones (`weekly_batches.deleted_at IS NOT NULL`) are excluded.
  *
  * `scheduledTime` is derived from `batch.createdAt + (postOrder - 1) days`
- * — the same proxy the batch detail page uses. When Phase 7's writer ships,
- * swap to `scheduled_posts.scheduled_time` for the true per-post time.
+ * — the same proxy used everywhere else today. When Phase 7's writer
+ * ships, swap to `scheduled_posts.scheduled_time` for the true per-post
+ * time.
  *
  * Each row's `text` is the per-platform text: `posts.postText` (canonical
- * Facebook) for FB, `post_variations.adaptedText` for IG / LI. Falls back
- * to `posts.postText` when the variation row is missing (Starter users
- * who don't get variations).
+ * Facebook) for FB, `post_variations.postText` for IG / LI. Falls back to
+ * the canonical when no variation row exists (Starter users).
  *
- * Rows are ordered by `scheduledTime` ascending across all batches so the
- * tab list reads in publish order.
+ * Within each batch, rows are ordered by `scheduledTime` ascending.
+ * Batches are ordered by `batch.createdAt` ascending across all batches.
  */
 export async function getAllScheduledPostsForUser(
   userId: string
-): Promise<Record<SelectionPlatform, ScheduledPostRowData[]>> {
+): Promise<Record<SelectionPlatform, BatchGroup<ScheduledPostRowData>[]>> {
+  const out: Record<SelectionPlatform, BatchGroup<ScheduledPostRowData>[]> = {
+    facebook: [],
+    instagram: [],
+    linkedin: [],
+  };
+
   const rows = await db
     .select({
       postId: posts.id,
       batchId: posts.batchId,
       postOrder: posts.postOrder,
       postText: posts.postText,
+      batchTheme: weeklyBatches.theme,
+      batchImportantThing: weeklyBatches.importantThing,
       batchCreatedAt: weeklyBatches.createdAt,
       platform: postSelections.platform,
       variationText: postVariations.postText,
@@ -2047,25 +2102,41 @@ export async function getAllScheduledPostsForUser(
       )
     );
 
-  const out: Record<SelectionPlatform, ScheduledPostRowData[]> = {
-    facebook: [],
-    instagram: [],
-    linkedin: [],
+  // Per-platform map: batchId → BatchGroup. Built up as we walk the rows
+  // so we materialise one BatchGroup per (platform, batch) only the
+  // first time we see a row for that combo.
+  const groupsByPlatform: Record<
+    SelectionPlatform,
+    Map<string, BatchGroup<ScheduledPostRowData>>
+  > = {
+    facebook: new Map(),
+    instagram: new Map(),
+    linkedin: new Map(),
   };
 
   for (const r of rows) {
     const platform = r.platform as SelectionPlatform;
-    if (!(platform in out)) continue;
+    if (!(platform in groupsByPlatform)) continue;
+
     const scheduledTime = new Date(r.batchCreatedAt);
     scheduledTime.setDate(scheduledTime.getDate() + (r.postOrder - 1));
-    // Facebook always reads the canonical post text; IG / LI prefer their
-    // variation but fall back to the canonical when no variation row exists
-    // (Starter plan, or pre-variations legacy batches).
     const text =
       platform === "facebook"
         ? r.postText
         : r.variationText ?? r.postText;
-    out[platform].push({
+
+    let group = groupsByPlatform[platform].get(r.batchId);
+    if (!group) {
+      group = {
+        batchId: r.batchId,
+        batchTheme: r.batchTheme,
+        batchImportantThing: r.batchImportantThing,
+        batchCreatedAt: r.batchCreatedAt,
+        rows: [],
+      };
+      groupsByPlatform[platform].set(r.batchId, group);
+    }
+    group.rows.push({
       postId: r.postId,
       batchId: r.batchId,
       platform,
@@ -2075,14 +2146,391 @@ export async function getAllScheduledPostsForUser(
     });
   }
 
-  // Stable ascending order by scheduled date across all batches.
-  for (const platform of Object.keys(out) as SelectionPlatform[]) {
-    out[platform].sort(
-      (a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime()
+  // Flatten + sort. Within a group, rows ascend by scheduledTime; across
+  // groups, batches ascend by batchCreatedAt.
+  for (const platform of Object.keys(groupsByPlatform) as SelectionPlatform[]) {
+    const arr = Array.from(groupsByPlatform[platform].values());
+    for (const group of arr) {
+      group.rows.sort(
+        (a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime()
+      );
+    }
+    arr.sort(
+      (a, b) => a.batchCreatedAt.getTime() - b.batchCreatedAt.getTime()
     );
+    out[platform] = arr;
   }
 
   return out;
+}
+
+/**
+ * Per-network unscheduled-posts reader for the `/schedule-posts` tabs
+ * view. Returns every `(post, platform)` combo that has NO
+ * `post_selections` row, across BOTH `'reviewing'` and `'scheduling'`
+ * batches — perfect mirror of {@link getAllScheduledPostsForUser}.
+ *
+ * The schedule-posts row needs richer data than the posting-soon row:
+ *  - Full `Post` for the existing `<EditDialog post={post}>` reuse.
+ *  - Full `PostImageStatus` for `<PostTileImage>` rendering (Pro users
+ *    get the corner regenerate icon automatically).
+ *
+ * Filter to `(postId, platform)` combos with no selection: we fetch
+ * every existing `post_selections` row for the candidate posts into a
+ * Set keyed by `${postId}:${platform}` and skip any combo that hits.
+ *
+ * Grouped by platform AND by batch — every platform's array contains
+ * one entry per batch that has at least one unscheduled combo on that
+ * platform; the batch header carries `theme` + `importantThing` for
+ * the week-separator UI.
+ *
+ * Ordering: within a batch, rows ascend by `scheduledTime`; across
+ * batches, ascending by `batchCreatedAt`.
+ */
+export async function getAllUnscheduledPostsForUser(
+  userId: string,
+  platforms: SelectionPlatform[]
+): Promise<Record<SelectionPlatform, BatchGroup<UnscheduledPostRowData>[]>> {
+  const out: Record<SelectionPlatform, BatchGroup<UnscheduledPostRowData>[]> = {
+    facebook: [],
+    instagram: [],
+    linkedin: [],
+  };
+
+  if (platforms.length === 0) return out;
+
+  // 1. Matching batches (reviewing OR scheduling, not tombstoned).
+  const batchRows = await db
+    .select()
+    .from(weeklyBatches)
+    .where(
+      and(
+        eq(weeklyBatches.userId, userId),
+        inArray(weeklyBatches.status, ["reviewing", "scheduling"]),
+        isNull(weeklyBatches.deletedAt)
+      )
+    );
+
+  if (batchRows.length === 0) return out;
+
+  const batchIds = batchRows.map((b) => b.id);
+  const batchById = new Map(batchRows.map((b) => [b.id, b]));
+
+  // 2. All posts in those batches (full Post rows, ready to pass to
+  //    `<EditDialog post={post}>` verbatim).
+  const postRows = await db
+    .select()
+    .from(posts)
+    .where(inArray(posts.batchId, batchIds));
+
+  if (postRows.length === 0) return out;
+
+  const postIds = postRows.map((p) => p.id);
+
+  // 3. Variations for IG / LI per-platform text.
+  const variationRows = await db
+    .select({
+      postId: postVariations.postId,
+      platform: postVariations.platform,
+      text: postVariations.postText,
+    })
+    .from(postVariations)
+    .where(inArray(postVariations.postId, postIds));
+  const variationByPostPlatform = new Map<string, string>();
+  for (const v of variationRows) {
+    variationByPostPlatform.set(`${v.postId}:${v.platform}`, v.text);
+  }
+
+  // 4. Images for `<PostTileImage>` (status + URL + attempt + id).
+  const imageRows = await db
+    .select({
+      id: postImages.id,
+      postId: postImages.postId,
+      status: postImages.status,
+      imageUrl: postImages.imageUrl,
+      attempt: postImages.attempt,
+    })
+    .from(postImages)
+    .where(inArray(postImages.postId, postIds));
+  const imageByPost = new Map<string, PostImageStatus>();
+  for (const img of imageRows) {
+    imageByPost.set(img.postId, {
+      id: img.id,
+      status: img.status as PostImageStatus["status"],
+      imageUrl: img.imageUrl,
+      attempt: img.attempt,
+    });
+  }
+
+  // 5. Existing `post_selections` — used to FILTER OUT already-scheduled
+  //    combos. Set keyed by `${postId}:${platform}` for O(1) lookup
+  //    inside the cross-product loop.
+  const selectionRows = await db
+    .select({
+      postId: postSelections.postId,
+      platform: postSelections.platform,
+    })
+    .from(postSelections)
+    .where(inArray(postSelections.postId, postIds));
+  const selectedSet = new Set<string>();
+  for (const sel of selectionRows) {
+    selectedSet.add(`${sel.postId}:${sel.platform}`);
+  }
+
+  // 6. Walk posts × platforms; emit one row per combo with no selection.
+  //    Group materialises lazily on first hit per (platform, batch).
+  const groupsByPlatform: Record<
+    SelectionPlatform,
+    Map<string, BatchGroup<UnscheduledPostRowData>>
+  > = {
+    facebook: new Map(),
+    instagram: new Map(),
+    linkedin: new Map(),
+  };
+
+  for (const post of postRows) {
+    const batch = batchById.get(post.batchId);
+    if (!batch) continue; // defensive — batch was filtered above
+    const scheduledTime = new Date(batch.createdAt);
+    scheduledTime.setDate(scheduledTime.getDate() + (post.postOrder - 1));
+    const image = imageByPost.get(post.id);
+
+    for (const platform of platforms) {
+      if (!(platform in groupsByPlatform)) continue;
+      const key = `${post.id}:${platform}`;
+      if (selectedSet.has(key)) continue; // already scheduled — skip
+
+      const text =
+        platform === "facebook"
+          ? post.postText
+          : variationByPostPlatform.get(key) ?? post.postText;
+
+      let group = groupsByPlatform[platform].get(batch.id);
+      if (!group) {
+        group = {
+          batchId: batch.id,
+          batchTheme: batch.theme,
+          batchImportantThing: batch.importantThing,
+          batchCreatedAt: batch.createdAt,
+          rows: [],
+        };
+        groupsByPlatform[platform].set(batch.id, group);
+      }
+      group.rows.push({
+        postId: post.id,
+        batchId: batch.id,
+        platform,
+        text,
+        scheduledTime,
+        post,
+        image,
+      });
+    }
+  }
+
+  // 7. Flatten + sort. Within a group, rows ascend by scheduledTime;
+  //    across groups, batches ascend by batchCreatedAt.
+  for (const platform of Object.keys(groupsByPlatform) as SelectionPlatform[]) {
+    const arr = Array.from(groupsByPlatform[platform].values());
+    for (const group of arr) {
+      group.rows.sort(
+        (a, b) => a.scheduledTime.getTime() - b.scheduledTime.getTime()
+      );
+    }
+    arr.sort(
+      (a, b) => a.batchCreatedAt.getTime() - b.batchCreatedAt.getTime()
+    );
+    out[platform] = arr;
+  }
+
+  return out;
+}
+
+/**
+ * Per-network instant Schedule for the `/schedule-posts` tabs view —
+ * symmetric counterpart to {@link unschedulePostForNetwork}.
+ *
+ * Inserts a `post_selections` row for `(postId, platform)` with
+ * `ON CONFLICT DO NOTHING` (idempotent — repeated clicks land cleanly).
+ * If the parent batch is currently `'reviewing'`, the same transaction
+ * flips it to `'scheduling'` so the new selection immediately surfaces
+ * on `/posting-soon` (which filters by `'scheduling'` status).
+ *
+ * Bypasses `loadPostForSelectionMutation`'s status guard — rows on
+ * `/schedule-posts` come from batches in EITHER status, and the action
+ * must work for both. Ownership is enforced via the `posts.userId`
+ * join on the pre-flight read.
+ */
+export async function scheduleForNetwork(
+  postId: string,
+  platform: SelectionPlatform,
+  sessionUserId: string
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_found" | "not_owned" | "db_failed" }
+> {
+  const [row] = await db
+    .select({
+      userId: posts.userId,
+      batchId: posts.batchId,
+      batchStatus: weeklyBatches.status,
+      batchDeletedAt: weeklyBatches.deletedAt,
+    })
+    .from(posts)
+    .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+    .where(eq(posts.id, postId))
+    .limit(1);
+
+  if (!row || row.batchDeletedAt !== null) {
+    return { ok: false, error: "not_found" };
+  }
+  if (row.userId !== sessionUserId) {
+    return { ok: false, error: "not_owned" };
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // 1. Idempotent insert. `(postId, platform)` is uniquely indexed
+      //    by the schema (`post_selections_post_platform_unique`), so
+      //    `ON CONFLICT DO NOTHING` collapses re-clicks to a no-op.
+      await tx
+        .insert(postSelections)
+        .values({
+          id: crypto.randomUUID(),
+          postId,
+          userId: sessionUserId,
+          platform,
+        })
+        .onConflictDoNothing({
+          target: [postSelections.postId, postSelections.platform],
+        });
+
+      // 2. Auto-flip `'reviewing'` → `'scheduling'` so the new selection
+      //    immediately appears on `/posting-soon`. Status-guarded UPDATE
+      //    is race-safe: if another transaction already flipped the
+      //    status, our WHERE matches zero rows and is a no-op.
+      if (row.batchStatus === "reviewing") {
+        await tx
+          .update(weeklyBatches)
+          .set({ status: "scheduling" })
+          .where(
+            and(
+              eq(weeklyBatches.id, row.batchId),
+              eq(weeklyBatches.status, "reviewing")
+            )
+          );
+      }
+    });
+    return { ok: true };
+  } catch (err) {
+    console.error("[postService.scheduleForNetwork]", err);
+    return { ok: false, error: "db_failed" };
+  }
+}
+
+/**
+ * Bulk Schedule-all for a platform. Inserts `post_selections` rows for
+ * every `(post, platform)` combo the user owns that doesn't already
+ * have one for `platform`, across all `'reviewing'`/`'scheduling'`
+ * batches. Single transaction; auto-flips any `'reviewing'` batches
+ * that were touched to `'scheduling'`.
+ *
+ * Returns the count of rows actually inserted so the UI toast can say
+ * "Scheduled N Facebook posts."
+ */
+export async function bulkScheduleAllUnscheduledForNetwork(
+  sessionUserId: string,
+  platform: SelectionPlatform
+): Promise<
+  | { ok: true; added: number }
+  | { ok: false; error: "db_failed" }
+> {
+  try {
+    // 1. Pre-flight read OUTSIDE the transaction: every (postId, batchId)
+    //    combo the user owns in an open batch, with the post-selection
+    //    state for THIS platform. Same multi-step pattern
+    //    `getAllUnscheduledPostsForUser` uses; keeps the transaction
+    //    tight to the actual writes.
+    const candidateRows = await db
+      .select({
+        postId: posts.id,
+        batchId: posts.batchId,
+        batchStatus: weeklyBatches.status,
+      })
+      .from(posts)
+      .innerJoin(weeklyBatches, eq(weeklyBatches.id, posts.batchId))
+      .where(
+        and(
+          eq(weeklyBatches.userId, sessionUserId),
+          inArray(weeklyBatches.status, ["reviewing", "scheduling"]),
+          isNull(weeklyBatches.deletedAt)
+        )
+      );
+
+    if (candidateRows.length === 0) return { ok: true, added: 0 };
+
+    const candidatePostIds = candidateRows.map((r) => r.postId);
+
+    const existingSelections = await db
+      .select({ postId: postSelections.postId })
+      .from(postSelections)
+      .where(
+        and(
+          inArray(postSelections.postId, candidatePostIds),
+          eq(postSelections.platform, platform)
+        )
+      );
+    const alreadySelected = new Set(existingSelections.map((s) => s.postId));
+
+    const toInsert = candidateRows.filter(
+      (r) => !alreadySelected.has(r.postId)
+    );
+    if (toInsert.length === 0) return { ok: true, added: 0 };
+
+    // Batch ids that need a status flip ('reviewing' → 'scheduling').
+    const reviewingBatchIds = Array.from(
+      new Set(
+        toInsert
+          .filter((r) => r.batchStatus === "reviewing")
+          .map((r) => r.batchId)
+      )
+    );
+
+    // 2. One transaction: insert all selections, then flip any
+    //    reviewing batches that gained selections.
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(postSelections)
+        .values(
+          toInsert.map((r) => ({
+            id: crypto.randomUUID(),
+            postId: r.postId,
+            userId: sessionUserId,
+            platform,
+          }))
+        )
+        .onConflictDoNothing({
+          target: [postSelections.postId, postSelections.platform],
+        });
+
+      if (reviewingBatchIds.length > 0) {
+        await tx
+          .update(weeklyBatches)
+          .set({ status: "scheduling" })
+          .where(
+            and(
+              inArray(weeklyBatches.id, reviewingBatchIds),
+              eq(weeklyBatches.status, "reviewing")
+            )
+          );
+      }
+    });
+
+    return { ok: true, added: toInsert.length };
+  } catch (err) {
+    console.error("[postService.bulkScheduleAllUnscheduledForNetwork]", err);
+    return { ok: false, error: "db_failed" };
+  }
 }
 
 /**
