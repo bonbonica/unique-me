@@ -525,7 +525,14 @@ export async function runImageGenerationForRow(
       result.imageBuffer,
       `${row.id}.png`,
       `post-images/${row.batchId}`,
-      { maxSize: 10 * 1024 * 1024 },
+      {
+        maxSize: 10 * 1024 * 1024,
+        // Regenerate writes a second blob for the same logical post_images
+        // row; Vercel Blob rejects the duplicate pathname unless we let it
+        // suffix the name. Retry keeps the fixed pathname because attempt 1
+        // already failed (no blob exists) so there's nothing to collide with.
+        addRandomSuffix: mode === "regenerate",
+      },
     );
 
     await db
