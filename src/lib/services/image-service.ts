@@ -528,10 +528,12 @@ export async function runImageGenerationForRow(
       {
         maxSize: 10 * 1024 * 1024,
         // Regenerate writes a second blob for the same logical post_images
-        // row; Vercel Blob rejects the duplicate pathname unless we let it
-        // suffix the name. Retry keeps the fixed pathname because attempt 1
-        // already failed (no blob exists) so there's nothing to collide with.
-        addRandomSuffix: mode === "regenerate",
+        // row; Vercel Blob rejects the duplicate pathname unless we allow
+        // an overwrite. Retry keeps the default (no overwrite) because
+        // attempt 1 already failed (no blob exists) so there's nothing to
+        // collide with. Overwriting also keeps the URL stable, so the row's
+        // `imageUrl` continues to point at the same Blob path.
+        allowOverwrite: mode === "regenerate",
       },
     );
 

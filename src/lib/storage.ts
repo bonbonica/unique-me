@@ -20,13 +20,12 @@ export interface StorageConfig {
   /** Allowed MIME types (default: images and documents) */
   allowedTypes?: string[];
   /**
-   * Vercel Blob only. When true, Vercel Blob appends a random suffix to the
-   * pathname before storing, so repeated uploads to the same logical filename
-   * don't collide. Used by the image regenerate path where the per-row
-   * pathname (`${row.id}.png`) is fixed but a second attempt must write to a
-   * new blob.
+   * Vercel Blob only. When true, Vercel Blob overwrites an existing blob at
+   * the same pathname instead of rejecting with "This blob already exists".
+   * Used by the image regenerate path where the per-row pathname
+   * (`${row.id}.png`) is fixed and a second attempt must replace the first.
    */
-  addRandomSuffix?: boolean;
+  allowOverwrite?: boolean;
 }
 
 /**
@@ -47,7 +46,7 @@ const DEFAULT_CONFIG: Required<StorageConfig> = {
     "text/csv",
     "application/json",
   ],
-  addRandomSuffix: false,
+  allowOverwrite: false,
 };
 
 /**
@@ -165,7 +164,7 @@ export async function upload(
     const pathname = folder ? `${folder}/${sanitizedFilename}` : sanitizedFilename;
     const blob = await put(pathname, buffer, {
       access: "public",
-      addRandomSuffix: config?.addRandomSuffix ?? false,
+      allowOverwrite: config?.allowOverwrite ?? false,
     });
 
     return {
