@@ -52,28 +52,80 @@ export async function generateImage(args: {
   combinedPrompt: string;
   size?: ImageSize;
 }): Promise<GeneratedImage | null> {
+  const size = args.size ?? "1024x1024";
+  const promptLen = args.combinedPrompt.length;
+  console.warn("[image-generator] generateImage start", {
+    model: OPENAI_IMAGE_MODEL,
+    size,
+    promptLen,
+  });
   try {
     const response = await openai.images.generate({
       model: OPENAI_IMAGE_MODEL,
       prompt: args.combinedPrompt,
-      size: args.size ?? "1024x1024",
+      size,
       n: 1,
     });
 
     const b64 = response.data?.[0]?.b64_json;
     if (!b64) {
+      // Log the response shape (not the full payload) so we can tell whether
+      // OpenAI returned no `data` array, an empty array, a non-b64_json
+      // variant, or something else entirely.
       console.error(
-        "[image-generator] generateImage: response missing data[0].b64_json"
+        "[image-generator] generateImage: response missing data[0].b64_json",
+        {
+          model: OPENAI_IMAGE_MODEL,
+          hasData: Array.isArray(response.data),
+          dataLength: response.data?.length ?? 0,
+          firstItemKeys: response.data?.[0]
+            ? Object.keys(response.data[0])
+            : null,
+        }
       );
       return null;
     }
 
+    console.warn("[image-generator] generateImage ok", {
+      bufferBytes: Buffer.byteLength(b64, "base64"),
+    });
     return {
       imageBuffer: Buffer.from(b64, "base64"),
       mimeType: "image/png",
     };
   } catch (err) {
-    console.error("[image-generator] generateImage threw", err);
+    // OpenAI SDK errors carry structured fields on the error object itself
+    // (`status`, `code`, `type`, `requestID`) plus a nested `error` payload
+    // with `code` / `type` / `message` / `param` from the API response.
+    // Surfacing them flat makes the log line greppable and skips the noisy
+    // stack trace that masked the actual cause in earlier triage.
+    const e = err as {
+      name?: string;
+      status?: number;
+      code?: string;
+      type?: string;
+      message?: string;
+      requestID?: string;
+      error?: {
+        code?: string;
+        type?: string;
+        message?: string;
+        param?: string;
+      };
+    };
+    console.error("[image-generator] generateImage threw", {
+      model: OPENAI_IMAGE_MODEL,
+      size,
+      promptLen,
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      status: e.status,
+      code: e.code ?? e.error?.code,
+      type: e.type ?? e.error?.type,
+      param: e.error?.param,
+      apiMessage: e.error?.message,
+      requestID: e.requestID,
+    });
     return null;
   }
 }

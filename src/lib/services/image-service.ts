@@ -484,6 +484,10 @@ export async function runImageGenerationForRow(
   postImageId: string,
   mode: "retry" | "regenerate",
 ): Promise<void> {
+  console.warn("[image-service] runImageGenerationForRow start", {
+    postImageId,
+    mode,
+  });
   try {
     const rows = await db
       .select({
@@ -505,12 +509,24 @@ export async function runImageGenerationForRow(
       return;
     }
 
+    console.warn("[image-service] runImageGenerationForRow row loaded", {
+      postImageId,
+      batchId: row.batchId,
+      promptLen: row.imagePrompt.length,
+      mode,
+    });
+
     const result = await generateImage({ combinedPrompt: row.imagePrompt });
 
     if (!result) {
+      const terminalStatus = mode === "retry" ? "failed" : "success";
+      console.warn(
+        "[image-service] runImageGenerationForRow generateImage returned null; reverting",
+        { postImageId, mode, terminalStatus },
+      );
       await db
         .update(postImages)
-        .set({ status: mode === "retry" ? "failed" : "success" })
+        .set({ status: terminalStatus })
         .where(eq(postImages.id, row.id))
         .catch((dbErr) => {
           console.error(
@@ -521,31 +537,71 @@ export async function runImageGenerationForRow(
       return;
     }
 
-    const stored = await upload(
-      result.imageBuffer,
-      `${row.id}.png`,
-      `post-images/${row.batchId}`,
-      {
-        maxSize: 10 * 1024 * 1024,
-        // Regenerate writes a second blob for the same logical post_images
-        // row; Vercel Blob rejects the duplicate pathname unless we allow
-        // an overwrite. Retry keeps the default (no overwrite) because
-        // attempt 1 already failed (no blob exists) so there's nothing to
-        // collide with. Overwriting also keeps the URL stable, so the row's
-        // `imageUrl` continues to point at the same Blob path.
+    console.warn("[image-service] runImageGenerationForRow uploading", {
+      postImageId,
+      bytes: result.imageBuffer.byteLength,
+      mode,
+      allowOverwrite: mode === "regenerate",
+    });
+
+    let stored;
+    try {
+      stored = await upload(
+        result.imageBuffer,
+        `${row.id}.png`,
+        `post-images/${row.batchId}`,
+        {
+          maxSize: 10 * 1024 * 1024,
+          // Regenerate writes a second blob for the same logical post_images
+          // row; Vercel Blob rejects the duplicate pathname unless we allow
+          // an overwrite. Retry keeps the default (no overwrite) because
+          // attempt 1 already failed (no blob exists) so there's nothing to
+          // collide with. Overwriting also keeps the URL stable, so the row's
+          // `imageUrl` continues to point at the same Blob path.
+          allowOverwrite: mode === "regenerate",
+        },
+      );
+    } catch (uploadErr) {
+      // Surface upload-specific failures distinctly from the OpenAI-side
+      // generateImage path. Blob errors usually carry `name` / `message`
+      // plus optional `status` / `cause` — log all four flat.
+      const e = uploadErr as { name?: string; message?: string; status?: number; cause?: unknown };
+      console.error("[image-service] runImageGenerationForRow upload failed", {
+        postImageId,
+        mode,
         allowOverwrite: mode === "regenerate",
-      },
-    );
+        name: uploadErr instanceof Error ? uploadErr.name : typeof uploadErr,
+        message: uploadErr instanceof Error ? uploadErr.message : String(uploadErr),
+        status: e.status,
+        cause: e.cause,
+      });
+      throw uploadErr;
+    }
+
+    console.warn("[image-service] runImageGenerationForRow upload ok", {
+      postImageId,
+      url: stored.url,
+      mode,
+    });
 
     await db
       .update(postImages)
       .set({ status: "success", imageUrl: stored.url })
       .where(eq(postImages.id, row.id));
+
+    console.warn("[image-service] runImageGenerationForRow complete", {
+      postImageId,
+      mode,
+    });
   } catch (err) {
+    const e = err as { name?: string; message?: string; status?: number; cause?: unknown };
     console.error("[image-service] runImageGenerationForRow failed", {
       postImageId,
       mode,
-      err,
+      name: err instanceof Error ? err.name : typeof err,
+      message: err instanceof Error ? err.message : String(err),
+      status: e.status,
+      cause: e.cause,
     });
     // Best-effort terminal recovery so the row doesn't stick in
     // generating/regenerating. retry → failed; regenerate → success
@@ -618,8 +674,19 @@ export async function regenerateImage(
   postImageId: string,
   sessionUserId: string,
 ): Promise<RegenerateImageResult> {
+  console.warn("[image-service] regenerateImage call", {
+    postImageId,
+    userId: sessionUserId,
+  });
+
   const sub = await subscriptionService.checkSubscription(sessionUserId);
   if (!subscriptionService.hasProFeatures(sub)) {
+    console.warn("[image-service] regenerateImage blocked: pro_required", {
+      postImageId,
+      userId: sessionUserId,
+      plan: sub.plan,
+      status: sub.status,
+    });
     return { ok: false, reason: "pro_required" };
   }
 
@@ -637,12 +704,17 @@ export async function regenerateImage(
     .returning({ id: postImages.id });
 
   if (updated.length === 0) {
-    return {
-      ok: false,
-      reason: await mapRegenerateFailureReason(postImageId, sessionUserId),
-    };
+    const reason = await mapRegenerateFailureReason(postImageId, sessionUserId);
+    console.warn(
+      "[image-service] regenerateImage blocked: gate UPDATE matched 0 rows",
+      { postImageId, userId: sessionUserId, reason },
+    );
+    return { ok: false, reason };
   }
 
+  console.warn("[image-service] regenerateImage scheduling worker", {
+    postImageId,
+  });
   after(() => runImageGenerationForRow(postImageId, "regenerate"));
   return { ok: true };
 }
