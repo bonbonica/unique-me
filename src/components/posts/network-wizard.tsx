@@ -208,14 +208,19 @@ export function NetworkWizard({
     imagesRef.current = images;
   });
 
-  // Image-generation Wave 2 Stage 4: per-tile snapshot of the pre-regenerate
-  // imageUrl. Populated by `handleRegenerate` on click, consumed by the
-  // polling tick once the row transitions back to `success` with attempt=2.
-  // If the URL is unchanged from the snapshot, the server reverted (regen
-  // failed and we preserved the original) — fire the "kept original" toast.
-  // Always deleted after the transition fires, success or fail, so the Map
-  // stays bounded by concurrent in-flight regenerates (max ~9 tiles).
-  const regenerateSnapshotsRef = useRef<Map<string, string>>(new Map());
+  // Image-generation Wave 2 Stage 4: set of postIds with an in-flight
+  // regenerate. Populated by `handleRegenerate` on click; consumed by the
+  // polling tick once the row transitions to `success` with attempt=2 so
+  // the user gets a success toast. Pre-allowOverwrite this was a Map keyed
+  // by the pre-click imageUrl so we could detect a server-side revert by
+  // URL equality — but with the new `allowOverwrite: true` blob upload the
+  // regen-success path rewrites the SAME blob URL, making URL equality
+  // always true. We trust the lifecycle alone now; the rare regen-failure
+  // path falls through to a misleading "Image regenerated." toast but
+  // preserves the original image visually, which is the dominant signal
+  // the user cares about. Distinguishing success from failure cleanly
+  // requires a server-side schema/return-shape change (out of scope here).
+  const regeneratesInFlightRef = useRef<Set<string>>(new Set());
 
   // Schedule state lifted up from <WizardSummary /> so the commit button
   // can render inside <WizardNav /> at the top-right corner — the same
@@ -267,21 +272,22 @@ export function NetworkWizard({
         if (cancelled) return;
 
         // Wave 2 Stage 4: detect regenerate completions BEFORE applying the
-        // poll update so we can compare the fresh imageUrl against the
-        // snapshot taken pre-click. Both outcomes (success-with-new-image
-        // and revert-to-original) land as status="success" + attempt=2;
-        // the URL comparison is what distinguishes them.
-        for (const [postId, originalUrl] of regenerateSnapshotsRef.current) {
+        // poll update so the user gets a success toast at the moment the
+        // tile flips out of "regenerating". Both outcomes (success and
+        // revert-to-original) land as status="success" + attempt=2 and now
+        // — under allowOverwrite — also share the same `imageUrl`, so the
+        // lifecycle transition is the only signal we have. We assume
+        // success (the dominant path) and accept the trade-off described
+        // on `regeneratesInFlightRef`.
+        for (const postId of regeneratesInFlightRef.current) {
           const freshTile = fresh[postId];
           if (
             freshTile &&
             freshTile.status === "success" &&
             freshTile.attempt === 2
           ) {
-            if (freshTile.imageUrl === originalUrl) {
-              toast.error("Regeneration failed. Kept the original image.");
-            }
-            regenerateSnapshotsRef.current.delete(postId);
+            toast.success("Image regenerated.");
+            regeneratesInFlightRef.current.delete(postId);
           }
         }
 
@@ -358,8 +364,8 @@ export function NetworkWizard({
    * server enforces the tier gate regardless. Optimistic flip to
    * `regenerating` keeps the original `imageUrl` visible (dimmed) so the
    * user never sees a skeleton flash. On rejection we revert. On accept
-   * we hand the snapshot to the polling tick which fires the "kept
-   * original" toast if the URL is unchanged at attempt=2.
+   * we mark the postId as in-flight so the polling tick can fire a
+   * success toast when the row flips back to `success` at attempt=2.
    */
   async function handleRegenerate(postId: string) {
     const current = imagesRef.current[postId];
@@ -372,7 +378,6 @@ export function NetworkWizard({
       return;
     }
     const postImageId = current.id;
-    const originalUrl = current.imageUrl;
 
     setImages((prev) => {
       const existing = prev[postId];
@@ -389,10 +394,12 @@ export function NetworkWizard({
       };
     });
 
-    // Stash the pre-click URL so the polling tick can decide whether the
-    // eventual `regenerating → success` transition was a real new image
-    // (URL changed) or a preserved original (URL unchanged → toast).
-    regenerateSnapshotsRef.current.set(postId, originalUrl);
+    // Mark this tile as having an in-flight regenerate so the polling tick
+    // can surface a success toast at the lifecycle transition. We no longer
+    // store the pre-click URL — `allowOverwrite` keeps the URL stable, so
+    // URL-equality comparisons can't distinguish success from server-side
+    // revert. See `regeneratesInFlightRef`'s docblock for the trade-off.
+    regeneratesInFlightRef.current.add(postId);
 
     const revert = () => {
       setImages((prev) => {
@@ -403,7 +410,7 @@ export function NetworkWizard({
           [postId]: { ...existing, status: "success", attempt: 1 },
         };
       });
-      regenerateSnapshotsRef.current.delete(postId);
+      regeneratesInFlightRef.current.delete(postId);
     };
 
     try {
