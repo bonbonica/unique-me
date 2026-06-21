@@ -616,7 +616,12 @@ export function OnboardingForm({ plan }: OnboardingFormProps) {
           >
             <SelectValue placeholder="Select your business type" />
           </SelectTrigger>
-          <SelectContent>
+          {/* position="popper" so the dropdown is touch-scrollable on
+              mobile. The shadcn default ("item-aligned") shows scroll
+              chevron buttons that are unreliable with touch, leaving users
+              unable to reach options below the fold when the list exceeds
+              the viewport height (12 BUSINESS_TYPES does on a phone). */}
+          <SelectContent position="popper">
             {BUSINESS_TYPES.map((label) => (
               <SelectItem key={label} value={label}>
                 {label}
