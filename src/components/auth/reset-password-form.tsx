@@ -3,10 +3,12 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
+import { PasswordStrengthMeter } from "@/components/auth/password-strength-meter"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { resetPassword } from "@/lib/auth-client"
+import { evaluatePassword, getFriendlyError } from "@/lib/password-strength"
 
 export function ResetPasswordForm() {
   const router = useRouter()
@@ -45,8 +47,9 @@ export function ResetPasswordForm() {
       return
     }
 
-    if (password.length < 8) {
-      setFormError("Password must be at least 8 characters")
+    const { isValid, checks } = evaluatePassword(password)
+    if (!isValid) {
+      setFormError(getFriendlyError(checks))
       return
     }
 
@@ -77,12 +80,19 @@ export function ResetPasswordForm() {
         <Input
           id="password"
           type="password"
+          autoComplete="new-password"
           placeholder="Enter new password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           required
           disabled={isPending}
+          aria-describedby="password-requirements"
         />
+        <PasswordStrengthMeter password={password} className="pt-1" />
+        <p id="password-requirements" className="sr-only">
+          Password must be at least 8 characters and include a letter, a
+          number, and a symbol.
+        </p>
       </div>
       <div className="space-y-2">
         <Label htmlFor="confirmPassword">Confirm New Password</Label>

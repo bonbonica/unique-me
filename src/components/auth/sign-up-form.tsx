@@ -5,11 +5,13 @@ import { useState } from "react"
 import Link from "next/link"
 import { Mail } from "lucide-react"
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
+import { PasswordStrengthMeter } from "@/components/auth/password-strength-meter"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { signIn, signUp } from "@/lib/auth-client"
+import { evaluatePassword, getFriendlyError } from "@/lib/password-strength"
 
 type SignUpFormProps = {
   showGoogle?: boolean
@@ -60,11 +62,9 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
       return
     }
 
-    if (password.length < 8) {
-      setError({
-        type: "string",
-        text: "Password must be at least 8 characters.",
-      })
+    const { isValid, checks } = evaluatePassword(password)
+    if (!isValid) {
+      setError({ type: "string", text: getFriendlyError(checks) })
       return
     }
 
@@ -241,8 +241,17 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
             onChange={(e) => setPassword(e.target.value)}
             required
             disabled={isPending}
+            aria-describedby="password-requirements"
             className="h-11 bg-muted"
           />
+          <PasswordStrengthMeter
+            password={password}
+            className="pt-1"
+          />
+          <p id="password-requirements" className="sr-only">
+            Password must be at least 8 characters and include a letter, a
+            number, and a symbol.
+          </p>
         </div>
 
         <div className="space-y-2">
