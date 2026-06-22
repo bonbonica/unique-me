@@ -3,6 +3,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
+import { Mail } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -20,6 +21,12 @@ export function EmailPasswordSignInForm() {
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [isPending, setIsPending] = useState(false)
+  // Set when sign-in is rejected because the email isn't verified yet. Better
+  // Auth's sendOnSignIn re-issues the verification link in that same response,
+  // so we can confidently tell the user a fresh email is on the way.
+  const [verificationSentTo, setVerificationSentTo] = useState<string | null>(
+    null
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -34,6 +41,10 @@ export function EmailPasswordSignInForm() {
       })
 
       if (result.error) {
+        if (result.error.code === "EMAIL_NOT_VERIFIED") {
+          setVerificationSentTo(email)
+          return
+        }
         setError(result.error.message || "Could not sign in with those credentials.")
       } else {
         // Use both push + refresh so server components re-render with the new
@@ -46,6 +57,36 @@ export function EmailPasswordSignInForm() {
     } finally {
       setIsPending(false)
     }
+  }
+
+  if (verificationSentTo) {
+    return (
+      <div className="w-full space-y-6 text-center">
+        <div className="mx-auto size-12 rounded-2xl bg-primary/15 border border-primary/30 flex items-center justify-center">
+          <Mail className="size-6 text-primary" strokeWidth={1.5} />
+        </div>
+        <div className="space-y-3">
+          <h2 className="font-fraunces text-2xl tracking-tight font-medium">
+            Verify your email
+          </h2>
+          <p className="text-base text-muted-foreground leading-7">
+            We sent a new verification link to{" "}
+            <span className="text-foreground">{verificationSentTo}</span>. Click
+            it to finish setting up your account.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setVerificationSentTo(null)
+            setPassword("")
+          }}
+          className="text-sm text-primary hover:underline"
+        >
+          Back to sign in
+        </button>
+      </div>
+    )
   }
 
   return (

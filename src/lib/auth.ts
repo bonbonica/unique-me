@@ -28,6 +28,9 @@ export const auth = betterAuth({
     : {}),
   emailAndPassword: {
     enabled: true,
+    // Block sign-in until the email is verified. Google sign-ins are exempt
+    // because Better Auth marks OAuth emails as verified at creation time.
+    requireEmailVerification: true,
     // No email provider is wired up yet (Phase 1). The reset link is logged
     // to the terminal so a developer can copy it during local testing. When
     // we add a transactional email service this handler swaps to that call.
@@ -42,6 +45,12 @@ export const auth = betterAuth({
   },
   emailVerification: {
     sendOnSignUp: true,
+    // Re-send the verification link if an unverified user tries to sign in,
+    // so they can recover without leaving the login screen.
+    sendOnSignIn: true,
+    // After the user clicks the verification link, create a session and drop
+    // them on the callbackURL captured at sign-up time (currently `/create`).
+    autoSignInAfterVerification: true,
     // Same dev-only console transport as sendResetPassword above.
     sendVerificationEmail: async ({ user, url }) => {
       // Dev-only transport: the verification link is printed to the server

@@ -3,8 +3,7 @@
 import type { ReactNode } from "react"
 import { useState } from "react"
 import Link from "next/link"
-import { useRouter } from "next/navigation"
-import { toast } from "sonner"
+import { Mail } from "lucide-react"
 import { GoogleSignInButton } from "@/components/auth/google-sign-in-button"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -40,13 +39,17 @@ function isUserExistsError(err: {
 }
 
 export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
-  const router = useRouter()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
   const [error, setError] = useState<FormError | null>(null)
   const [isPending, setIsPending] = useState(false)
+  // Email address the verification link was sent to. When set, the form is
+  // replaced with a "check your inbox" confirmation panel.
+  const [verificationSentTo, setVerificationSentTo] = useState<string | null>(
+    null
+  )
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -87,6 +90,14 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
           })
 
           if (signInResult.error) {
+            // Existing account is unverified — Better Auth's sendOnSignIn has
+            // already re-issued a verification link. Surface the same
+            // "check your inbox" panel the fresh-signup path uses.
+            if (signInResult.error.code === "EMAIL_NOT_VERIFIED") {
+              setVerificationSentTo(email)
+              return
+            }
+
             // Password didn't match — show a recovery message with inline
             // links to /login and /forgot-password. We never echo the
             // submitted password in the error text.
@@ -113,11 +124,9 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
             return
           }
 
-          toast.success(
-            "Welcome back — you already had an account, signed you in."
-          )
-          router.push("/create")
-          router.refresh()
+          // Existing account was already verified — full-page reload so
+          // server components pick up the new session cookie on /create.
+          window.location.assign("/create")
           return
         }
 
@@ -126,8 +135,11 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
           text: result.error.message || "Could not create your account.",
         })
       } else {
-        router.push("/create")
-        router.refresh()
+        // Fresh sign-up succeeded. Better Auth has mailed a verification link
+        // (sendOnSignUp) and requireEmailVerification blocks sign-in until
+        // it's clicked, so we hold the user on a confirmation panel rather
+        // than routing into the authenticated app.
+        setVerificationSentTo(email)
       }
     } catch {
       setError({
@@ -137,6 +149,40 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
     } finally {
       setIsPending(false)
     }
+  }
+
+  if (verificationSentTo) {
+    return (
+      <div className="w-full space-y-6 text-center">
+        <div className="mx-auto size-12 rounded-2xl bg-primary/15 border border-primary/30 flex items-center justify-center">
+          <Mail className="size-6 text-primary" strokeWidth={1.5} />
+        </div>
+        <div className="space-y-3">
+          <h2 className="font-fraunces text-2xl tracking-tight font-medium">
+            Check your email
+          </h2>
+          <p className="text-base text-muted-foreground leading-7">
+            We sent a verification link to{" "}
+            <span className="text-foreground">{verificationSentTo}</span>. Click
+            the link to activate your account, then you&apos;ll be signed in.
+          </p>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Wrong address?{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setVerificationSentTo(null)
+              setError(null)
+            }}
+            className="text-primary hover:underline"
+          >
+            Start over
+          </button>
+          .
+        </p>
+      </div>
+    )
   }
 
   return (
