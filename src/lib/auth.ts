@@ -59,6 +59,27 @@ export const auth = betterAuth({
       trustedProviders: ["google"],
     },
   },
+  // Brute-force + abuse protection on the auth endpoints. BetterAuth's built-in
+  // limiter is enabled by default in production; we keep that default and add
+  // per-path overrides for the sensitive endpoints. Storage is "database" so
+  // counts are shared across serverless function instances (memory storage is
+  // per-instance and an attacker can spread requests across cold starts).
+  rateLimit: {
+    storage: "database",
+    customRules: {
+      // Covers /sign-in/email and /sign-in/social. 5 attempts/minute/IP is
+      // enough for fat-fingered passwords without giving brute force room.
+      "/sign-in/*": { window: 60, max: 5 },
+      "/sign-up/email": { window: 60, max: 5 },
+      // Password-reset + verification emails cost money (Resend) — keep these
+      // tighter than sign-in.
+      "/forget-password": { window: 60, max: 3 },
+      "/reset-password": { window: 60, max: 5 },
+      "/send-verification-email": { window: 60, max: 3 },
+      // Verification link is clicked from an email; tolerate retries.
+      "/verify-email": { window: 60, max: 10 },
+    },
+  },
   databaseHooks: {
     user: {
       create: {

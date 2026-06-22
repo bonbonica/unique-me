@@ -4,6 +4,7 @@ import {
   timestamp,
   boolean,
   integer,
+  bigint,
   jsonb,
   index,
   uniqueIndex,
@@ -88,6 +89,17 @@ export const verification = pgTable("verification", {
     .defaultNow()
     .$onUpdate(() => /* @__PURE__ */ new Date())
     .notNull(),
+});
+
+// BetterAuth rate-limit storage. Tracks per-(IP + path) request counts so the
+// built-in rate limiter survives across serverless function instances. Field
+// names mirror BetterAuth's RateLimit model (key/count/lastRequest) so the
+// drizzle adapter can locate them; `lastRequest` is epoch milliseconds.
+export const rateLimit = pgTable("rate_limit", {
+  id: text("id").primaryKey(),
+  key: text("key").notNull().unique(),
+  count: integer("count").notNull(),
+  lastRequest: bigint("last_request", { mode: "number" }).notNull(),
 });
 
 // =============================================================================
