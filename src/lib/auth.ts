@@ -50,6 +50,17 @@ export const auth = betterAuth({
     sendVerificationEmail: async ({ user, url }) => {
       await deliverVerificationEmail({ to: user.email, name: user.name, url })
     },
+    // Anchor the 7-day free trial to the verification moment, not the signup
+    // moment. Email/password signups skip startTrial in the user-create hook
+    // (emailVerified is false at that point), so this is where their trial
+    // clock actually starts. Idempotent via onConflictDoNothing.
+    afterEmailVerification: async (user) => {
+      try {
+        await subscriptionService.startTrial(user.id)
+      } catch (err) {
+        console.error("[auth] afterEmailVerification startTrial failed", err)
+      }
+    },
   },
   account: {
     accountLinking: {
@@ -84,6 +95,14 @@ export const auth = betterAuth({
     user: {
       create: {
         after: async (user) => {
+          // Only start the trial here for users who are already verified at
+          // creation — i.e. Google OAuth (BetterAuth marks trustedProviders
+          // accounts as emailVerified: true at user-create time). Email/password
+          // signups arrive here with emailVerified: false and start their trial
+          // later via the emailVerification.afterEmailVerification hook so the
+          // 7-day clock anchors to the verification moment, not the signup
+          // moment.
+          if (!user.emailVerified) return
           try {
             await subscriptionService.startTrial(user.id)
           } catch (err) {
@@ -95,6 +114,10 @@ export const auth = betterAuth({
     session: {
       create: {
         after: async (session) => {
+          // Defensive fallback: idempotent (onConflictDoNothing on user_id) so
+          // it's a no-op once a trial row already exists. Catches the rare case
+          // where the verification hook above failed but a session still got
+          // created.
           try {
             await subscriptionService.startTrial(session.userId)
           } catch (err) {
