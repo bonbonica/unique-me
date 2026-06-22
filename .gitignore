@@ -59,3 +59,7 @@ prompts/
 
 nul
 .vercel
+
+# destructive one-shot wipe scripts — local-only by policy.
+scripts/wipe-prod-db.ts
+scripts/wipe-prod-blob.ts
