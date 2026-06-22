@@ -2,6 +2,10 @@ import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
 import { subscriptionService } from "@/lib/services"
 import { db } from "./db"
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail as deliverVerificationEmail,
+} from "./email"
 
 // Google OAuth is optional. If both env vars are set we register the social
 // provider; otherwise the login page transparently falls back to email/password
@@ -31,16 +35,8 @@ export const auth = betterAuth({
     // Block sign-in until the email is verified. Google sign-ins are exempt
     // because Better Auth marks OAuth emails as verified at creation time.
     requireEmailVerification: true,
-    // No email provider is wired up yet (Phase 1). The reset link is logged
-    // to the terminal so a developer can copy it during local testing. When
-    // we add a transactional email service this handler swaps to that call.
     sendResetPassword: async ({ user, url }) => {
-      // Dev-only transport: the reset link is printed to the server log until
-      // a real email provider lands.
-      // eslint-disable-next-line no-console
-      console.log(
-        `\n${"=".repeat(60)}\nPASSWORD RESET\nUser: ${user.email}\nReset URL: ${url}\n${"=".repeat(60)}\n`
-      )
+      await sendPasswordResetEmail({ to: user.email, name: user.name, url })
     },
   },
   emailVerification: {
@@ -51,14 +47,8 @@ export const auth = betterAuth({
     // After the user clicks the verification link, create a session and drop
     // them on the callbackURL captured at sign-up time (currently `/create`).
     autoSignInAfterVerification: true,
-    // Same dev-only console transport as sendResetPassword above.
     sendVerificationEmail: async ({ user, url }) => {
-      // Dev-only transport: the verification link is printed to the server
-      // log until a real email provider lands.
-      // eslint-disable-next-line no-console
-      console.log(
-        `\n${"=".repeat(60)}\nEMAIL VERIFICATION\nUser: ${user.email}\nVerification URL: ${url}\n${"=".repeat(60)}\n`
-      )
+      await deliverVerificationEmail({ to: user.email, name: user.name, url })
     },
   },
   account: {

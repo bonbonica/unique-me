@@ -36,6 +36,12 @@ const serverEnvSchema = z.object({
   // never reads or writes connected_accounts.
   ENCRYPTION_KEY: z.string().optional(),
 
+  // Email delivery. Resend sends the verification and password-reset emails
+  // from noreply@uniqueme.app. Required in production; when unset in dev the
+  // email helper falls back to logging the link to the server console so a
+  // contributor can still complete the verification flow.
+  RESEND_API_KEY: z.string().optional(),
+
   // Storage
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
 
@@ -166,6 +172,15 @@ export function checkEnv(): void {
 
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     warnings.push("BLOB_READ_WRITE_TOKEN is not set. Using local storage for file uploads.");
+  }
+
+  if (!process.env.RESEND_API_KEY) {
+    if (isProduction) {
+      throw new Error("RESEND_API_KEY is required in production");
+    }
+    warnings.push(
+      "RESEND_API_KEY is not set. Verification and password-reset links will be logged to the server console instead of emailed."
+    );
   }
 
   // Log warnings in development
