@@ -153,10 +153,18 @@ export function PostTileImage({
     // pending/generating rather than a broken overlay.
     return (
       <div
-        className={`bg-muted rounded-lg ${aspectClass} animate-pulse`}
+        className={`relative bg-muted rounded-lg ${aspectClass} animate-pulse`}
         role="status"
         aria-label="Image is being generated"
-      />
+      >
+        <div className="absolute inset-0 flex items-center justify-center">
+          <Loader2
+            className="size-7 animate-spin text-primary"
+            strokeWidth={1.5}
+            aria-hidden
+          />
+        </div>
+      </div>
     );
   }
 
