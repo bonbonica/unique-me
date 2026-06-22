@@ -41,7 +41,6 @@ export function ForgotPasswordForm() {
       <div className="space-y-4 w-full max-w-sm text-center">
         <p className="text-sm text-muted-foreground">
           If an account exists with that email, a password reset link has been sent.
-          Check your terminal for the reset URL.
         </p>
         <Link href="/login">
           <Button variant="outline" className="w-full">

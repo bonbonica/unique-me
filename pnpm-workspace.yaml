@@ -8,6 +8,21 @@ overrides:
   kysely: 0.28.17
   '@types/react': 19.2.5
   '@types/react-dom': 19.2.3
+  # Security audit A03.1 — pin patched versions of transitive dependencies
+  # that have published CVEs at versions our direct deps still pull in.
+  # Each entry tracks an advisory listed in `pnpm audit`; remove only when
+  # the direct dependency upgrades on its own (e.g. firecrawl-js or
+  # @vercel/blob bumping its lockfile-pinned axios/undici).
+  axios: ^1.16.0
+  form-data: ^4.0.6
+  undici: ^6.27.0
+  postcss: ^8.5.10
+  hono: ^4.12.25
+  esbuild: ^0.25.0
+  # @ai-sdk/provider-utils Low-severity DoS advisory (GHSA-...) names a
+  # patched version that doesn't exist in the 3.x lineage we depend on via
+  # @ai-sdk/react@2.x. Bumping to 4.x would require an AI SDK major upgrade;
+  # tracked for the next AI SDK bump.
 
 # Force pnpm to install platform binaries for both the developer's host
 # and Vercel's linux-x64/glibc runtime. Without this, sharp's per-platform

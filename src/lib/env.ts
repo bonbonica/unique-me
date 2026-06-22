@@ -170,6 +170,17 @@ export function checkEnv(): void {
     );
   }
 
+  // If ENCRYPTION_KEY is set, it must be a 32-byte base64 string (44 chars
+  // including `=`). Catches truncated / placeholder values before Phase 5+
+  // hands them to AES-256-GCM and silently produces weak keys.
+  const encryptionKey = process.env.ENCRYPTION_KEY;
+  if (encryptionKey && !/^[A-Za-z0-9+/]{43}=$/.test(encryptionKey)) {
+    throw new Error(
+      "ENCRYPTION_KEY must be a 32-byte base64 string (44 chars including '='). " +
+      "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\""
+    );
+  }
+
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
     warnings.push("BLOB_READ_WRITE_TOKEN is not set. Using local storage for file uploads.");
   }

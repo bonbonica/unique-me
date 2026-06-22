@@ -34,12 +34,11 @@ export interface StorageConfig {
 const DEFAULT_CONFIG: Required<StorageConfig> = {
   maxSize: 5 * 1024 * 1024, // 5MB
   allowedTypes: [
-    // Images
+    // Images (raster only — SVG/GIF excluded; SVG can execute JavaScript
+    // when served and GIF is rarely needed for product image uploads)
     "image/jpeg",
     "image/png",
-    "image/gif",
     "image/webp",
-    "image/svg+xml",
     // Documents
     "application/pdf",
     "text/plain",
@@ -56,9 +55,7 @@ const ALLOWED_EXTENSIONS = new Set([
   ".jpg",
   ".jpeg",
   ".png",
-  ".gif",
   ".webp",
-  ".svg",
   ".pdf",
   ".txt",
   ".csv",

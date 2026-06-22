@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { signIn, signUp } from "@/lib/auth-client"
+import { signUp } from "@/lib/auth-client"
 import { evaluatePassword, getFriendlyError } from "@/lib/password-strength"
 
 type SignUpFormProps = {
@@ -19,26 +19,12 @@ type SignUpFormProps = {
 
 /**
  * Discriminated union for the error state. Most failures are plain strings,
- * but the "account exists + wrong password" branch needs to render inline
- * links to /login and /forgot-password, so we allow ReactNode there.
+ * but the "account may already exist" branch renders inline links to /login
+ * and /forgot-password, so we allow ReactNode there.
  */
 type FormError =
   | { type: "string"; text: string }
   | { type: "node"; node: ReactNode }
-
-/**
- * Heuristic detector for "this email is already in use" responses from
- * Better Auth. The server reliably returns code `USER_ALREADY_EXISTS`, but
- * older clients and translated messages fall back to a fuzzy text match so
- * we don't miss the case.
- */
-function isUserExistsError(err: {
-  code?: string | undefined
-  message?: string | undefined
-}): boolean {
-  if (err.code === "USER_ALREADY_EXISTS") return true
-  return Boolean(err.message && /exist|already/i.test(err.message))
-}
 
 export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
   const [name, setName] = useState("")
@@ -79,54 +65,31 @@ export function SignUpForm({ showGoogle = false }: SignUpFormProps) {
       })
 
       if (result.error) {
-        // Smart fallback: if the email is already registered, try signing the
-        // user in with the same credentials. This handles the common
-        // "I forgot I already had an account" path without a second form.
-        if (isUserExistsError(result.error)) {
-          const signInResult = await signIn.email({
-            email,
-            password,
-            callbackURL: "/create",
+        // USER_ALREADY_EXISTS is rendered with the same symmetric copy as a
+        // generic failure so we never confirm to an attacker whether a given
+        // email is registered (user enumeration). The previous "smart sign-in"
+        // fallback also bypassed the /sign-in/* rate limit by re-firing
+        // credentials through the registration endpoint — that path is gone.
+        if (result.error.code === "USER_ALREADY_EXISTS") {
+          setError({
+            type: "node",
+            node: (
+              <>
+                We couldn&apos;t create that account. If you already have one,
+                try{" "}
+                <Link href="/login" className="text-primary hover:underline">
+                  signing in
+                </Link>{" "}
+                instead.{" "}
+                <Link
+                  href="/forgot-password"
+                  className="text-primary hover:underline"
+                >
+                  forgot password?
+                </Link>
+              </>
+            ),
           })
-
-          if (signInResult.error) {
-            // Existing account is unverified — Better Auth's sendOnSignIn has
-            // already re-issued a verification link. Surface the same
-            // "check your inbox" panel the fresh-signup path uses.
-            if (signInResult.error.code === "EMAIL_NOT_VERIFIED") {
-              setVerificationSentTo(email)
-              return
-            }
-
-            // Password didn't match — show a recovery message with inline
-            // links to /login and /forgot-password. We never echo the
-            // submitted password in the error text.
-            setError({
-              type: "node",
-              node: (
-                <>
-                  An account already exists for this email, but that password
-                  doesn&apos;t match.{" "}
-                  <Link href="/login" className="text-primary hover:underline">
-                    Sign in
-                  </Link>{" "}
-                  or{" "}
-                  <Link
-                    href="/forgot-password"
-                    className="text-primary hover:underline"
-                  >
-                    reset your password
-                  </Link>
-                  .
-                </>
-              ),
-            })
-            return
-          }
-
-          // Existing account was already verified — full-page reload so
-          // server components pick up the new session cookie on /create.
-          window.location.assign("/create")
           return
         }
 

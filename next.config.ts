@@ -98,8 +98,20 @@ const nextConfig: NextConfig = {
             value: "strict-origin-when-cross-origin",
           },
           {
-            key: "X-XSS-Protection",
-            value: "1; mode=block",
+            key: "Strict-Transport-Security",
+            value: "max-age=63072000; includeSubDomains; preload",
+          },
+          // Content Security Policy. We allow 'unsafe-inline' for script-src
+          // and style-src because Next.js App Router + React 19 emits inline
+          // scripts for Flight streaming and inline styles for hydration that
+          // we can't easily hash without a nonce. A nonce-based strict CSP
+          // (set via middleware on every request and threaded through
+          // <Script nonce={...}>) is future work — once that lands we can
+          // drop 'unsafe-inline' from both directives.
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'self'; img-src 'self' blob: data: https://*.public.blob.vercel-storage.com https://lh3.googleusercontent.com https://avatars.githubusercontent.com; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'",
           },
           {
             key: "Permissions-Policy",

@@ -6,6 +6,7 @@ import { auth } from "@/lib/auth";
 import { BUSINESS_TYPES } from "@/lib/profile/constants";
 import { checkContentPolicy } from "@/lib/profile/content-policy";
 import { setHasProfileCookie } from "@/lib/profile/cookie";
+import { isPublicHttpUrl } from "@/lib/profile/url-safety";
 import { type WebsiteAnalysis } from "@/lib/schema";
 import { profileService, subscriptionService } from "@/lib/services";
 import { type SaveProfileInput } from "@/lib/services/profile-service";
@@ -126,6 +127,17 @@ export async function analyzeWebsiteAction(
 
   const normalizedUrl = normalizeUrl(url);
   if (!normalizedUrl) {
+    return { ok: false, reason: "INVALID_URL" };
+  }
+
+  // SSRF guard (security audit A05.2): reject URLs that point at private /
+  // loopback / link-local / metadata addresses, or that use non-standard
+  // ports. The check has to run after normalisation (so the host has been
+  // parsed) and before the scrape (so we don't burn paid credits or expose
+  // Firecrawl's network to a probe). We surface the same INVALID_URL reason
+  // as a syntactic failure — the form already renders a friendly fallback
+  // for that case and we don't want to leak which deny-list rule matched.
+  if (!(await isPublicHttpUrl(normalizedUrl))) {
     return { ok: false, reason: "INVALID_URL" };
   }
 
@@ -342,7 +354,17 @@ export async function saveOnboardingAction(
       }
     }
 
-    if (!websiteAnalysis) {
+    // SSRF guard (security audit A05.2): the cached analysis path above is
+    // already trusted (URL match + structural check), but a fresh live scrape
+    // must not be issued against private / loopback / link-local / metadata
+    // hosts. We skip enrichment instead of failing the submit — onboarding
+    // is allowed to complete without an analysis, and the URL has already
+    // passed the syntactic refines in `onboardingFormSchema`, so silently
+    // dropping enrichment matches the existing best-effort contract for any
+    // scrape failure.
+    if (!(await isPublicHttpUrl(websiteUrl))) {
+      websiteAnalysis = null;
+    } else if (!websiteAnalysis) {
       websiteAnalysis = await profileService.scrapeAndAnalyzeWebsite(
         websiteUrl
       );

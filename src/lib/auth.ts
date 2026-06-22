@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth"
 import { drizzleAdapter } from "better-auth/adapters/drizzle"
+import { logError } from "@/lib/log"
 import { subscriptionService } from "@/lib/services"
 import { db } from "./db"
 import {
@@ -58,7 +59,10 @@ export const auth = betterAuth({
       try {
         await subscriptionService.startTrial(user.id)
       } catch (err) {
-        console.error("[auth] afterEmailVerification startTrial failed", err)
+        logError("auth.afterEmailVerification.startTrial_failed", {
+          userId: user.id,
+          err,
+        })
       }
     },
   },
@@ -106,7 +110,10 @@ export const auth = betterAuth({
           try {
             await subscriptionService.startTrial(user.id)
           } catch (err) {
-            console.error("[auth] user-create startTrial failed", err)
+            logError("auth.user_create.startTrial_failed", {
+              userId: user.id,
+              err,
+            })
           }
         },
       },
@@ -121,7 +128,10 @@ export const auth = betterAuth({
           try {
             await subscriptionService.startTrial(session.userId)
           } catch (err) {
-            console.error("[auth] session-create startTrial failed", err)
+            logError("auth.session_create.startTrial_failed", {
+              userId: session.userId,
+              err,
+            })
           }
         },
       },
