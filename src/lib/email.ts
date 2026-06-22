@@ -37,6 +37,11 @@ type SendEmailArgs = {
    * tell verification vs. reset traffic apart in their terminal.
    */
   logLabel: string
+  /**
+   * Action URL embedded in the email. Surfaced on its own line in the dev
+   * console fallback so it's trivially grep-able / clickable in the terminal.
+   */
+  actionUrl: string
 }
 
 async function sendEmail({
@@ -45,15 +50,18 @@ async function sendEmail({
   html,
   text,
   logLabel,
+  actionUrl,
 }: SendEmailArgs): Promise<void> {
   const client = getResendClient()
 
   if (!client) {
     // Dev fallback: no API key configured, keep the prior console-log behavior
-    // so contributors can still complete the verification flow locally.
+    // so contributors can still complete the verification flow locally. The
+    // URL is printed on its own labelled line at the top of the block so it
+    // jumps out of noisy dev logs.
     // eslint-disable-next-line no-console
     console.log(
-      `\n${"=".repeat(60)}\n${logLabel} (RESEND_API_KEY not set — console fallback)\nTo: ${to}\nSubject: ${subject}\n\n${text}\n${"=".repeat(60)}\n`
+      `\n${"=".repeat(60)}\n${logLabel} (RESEND_API_KEY not set — console fallback)\nTo: ${to}\nSubject: ${subject}\nURL: ${actionUrl}\n\n${text}\n${"=".repeat(60)}\n`
     )
     return
   }
@@ -162,6 +170,7 @@ export async function sendVerificationEmail({
         "If you didn't create a UniqueMe account, you can safely ignore this email.",
     }),
     logLabel: "EMAIL VERIFICATION",
+    actionUrl: url,
   })
 }
 
@@ -192,5 +201,6 @@ export async function sendPasswordResetEmail({
         "If you didn't ask to reset your password, you can safely ignore this email — your password won't change.",
     }),
     logLabel: "PASSWORD RESET",
+    actionUrl: url,
   })
 }
